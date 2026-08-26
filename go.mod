@@ -4,7 +4,7 @@ go 1.26.1
 
 require (
 	github.com/bmatcuk/doublestar/v4 v4.10.0
-	github.com/discobox-ai/x v0.0.0-20260821223655-c8f7674a2726
+	github.com/discobox-ai/x v0.0.0-20260826224013-0a7af8e05045
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-faster/errors v0.7.1
 	github.com/go-faster/jx v1.2.0
@@ -14,7 +14,6 @@ require (
 	go.opentelemetry.io/otel/metric v1.43.0
 	go.opentelemetry.io/otel/trace v1.43.0
 	golang.org/x/term v0.44.0
-	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/gorm v1.31.2
 )
 
@@ -59,6 +58,7 @@ require (
 	github.com/spf13/pflag v1.0.10 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.38.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 	modernc.org/libc v1.22.5 // indirect
 	modernc.org/mathutil v1.5.0 // indirect
 	modernc.org/memory v1.5.0 // indirect

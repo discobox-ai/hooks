@@ -3,7 +3,6 @@
 package parser
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -15,7 +14,7 @@ import (
 	"strings"
 
 	hooks "github.com/discobox-ai/hooks"
-	"gopkg.in/yaml.v3"
+	"github.com/discobox-ai/x/frontmatter"
 )
 
 const (
@@ -23,15 +22,6 @@ const (
 	GlobalIgnoreName = "ignore"
 )
 
-var commonHookExts = map[string]struct{}{
-	".sh": {}, ".bash": {}, ".zsh": {}, ".fish": {},
-	".py": {}, ".rb": {}, ".pl": {},
-	".js": {}, ".mjs": {}, ".cjs": {}, ".ts": {},
-	".md": {}, ".markdown": {}, ".txt": {},
-}
-
-var hookIDNonAlnum = regexp.MustCompile(`[^a-z0-9]+`)
-var hookIDOrderPrefix = regexp.MustCompile(`^[0-9]+-+`)
 var phaseNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
 // Discovery is the result of discovering a repository's hook directory.
@@ -185,91 +175,24 @@ func ParseFile(repoRoot, path string) (hooks.Hook, error) {
 	}
 	rel = filepath.ToSlash(rel)
 
-	parsed, err := parseFrontMatter(data)
+	parsed, err := frontmatter.Parse(data)
 	if err != nil {
 		return hooks.Hook{}, &ValidationError{Path: rel, Field: "front_matter", Err: err}
 	}
-	meta, err := decodeMetadata(parsed.meta)
+	fields, err := frontmatter.Decode(parsed.Meta)
 	if err != nil {
 		return hooks.Hook{}, &ValidationError{Path: rel, Field: "front_matter", Err: err}
 	}
-	return buildHook(rel, absPath, filepath.Base(path), data, mode, parsed, meta)
+	return buildHook(rel, absPath, filepath.Base(path), data, mode, parsed, metadataFrom(fields))
 }
 
-type parsedFrontMatter struct {
-	meta       []byte
-	body       string
-	hasShebang bool
-	delimiter  string
-}
-
-func parseFrontMatter(data []byte) (parsedFrontMatter, error) {
-	text := string(data)
-	text = strings.ReplaceAll(text, "\r\n", "\n")
-	lines := strings.SplitAfter(text, "\n")
-	if len(lines) == 0 || (len(lines) == 1 && lines[0] == "") {
-		return parsedFrontMatter{}, errors.New("missing front matter")
-	}
-	start := 0
-	hasShebang := strings.HasPrefix(strings.TrimSuffix(lines[0], "\n"), "#!")
-	if hasShebang {
-		start = 1
-	}
-	if start >= len(lines) {
-		return parsedFrontMatter{}, errors.New("missing opening delimiter")
-	}
-	delim := delimiterKind(lines[start])
-	if delim == "" {
-		return parsedFrontMatter{}, errors.New("missing opening delimiter")
-	}
-
-	var meta bytes.Buffer
-	closeIndex := -1
-	for i := start + 1; i < len(lines); i++ {
-		if delimiterKind(lines[i]) == delim {
-			closeIndex = i
-			break
-		}
-		line := strings.TrimSuffix(lines[i], "\n")
-		line = strings.TrimSuffix(line, "\r")
-		switch delim {
-		case "#---":
-			line = stripCommentPrefix(line, "#")
-		case "//---":
-			line = stripCommentPrefix(line, "//")
-		}
-		meta.WriteString(line)
-		meta.WriteByte('\n')
-	}
-	if closeIndex == -1 {
-		return parsedFrontMatter{}, errors.New("missing closing delimiter")
-	}
-	body := strings.Join(lines[closeIndex+1:], "")
-	return parsedFrontMatter{meta: meta.Bytes(), body: body, hasShebang: hasShebang, delimiter: delim}, nil
-}
-
-func delimiterKind(line string) string {
-	trimmed := strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r"))
-	switch trimmed {
-	case "---", "#---", "//---":
-		return trimmed
-	default:
-		return ""
-	}
-}
-
-func stripCommentPrefix(line, prefix string) string {
-	trimmed := strings.TrimLeft(line, " \t")
-	if strings.HasPrefix(trimmed, prefix) {
-		trimmed = strings.TrimPrefix(trimmed, prefix)
-		if strings.HasPrefix(trimmed, " ") || strings.HasPrefix(trimmed, "\t") {
-			trimmed = strings.TrimLeft(trimmed, " \t")
-		}
-		return trimmed
-	}
-	return line
-}
-
+// metadata is the hook domain's reading of a decoded front-matter block: the
+// keys hooks give meaning to, in the shape hooks want them, with everything
+// else kept as extensions.
+//
+// The spelling of keys and the shape of values are frontmatter's; what is
+// lowercased, what is a path, and which spellings are aliases of one field are
+// hook decisions and live here.
 type metadata struct {
 	Name        string
 	Type        string
@@ -286,128 +209,48 @@ type metadata struct {
 	Extensions  map[string]any
 }
 
-func decodeMetadata(data []byte) (metadata, error) {
-	var raw map[string]any
-	if err := yaml.Unmarshal(data, &raw); err != nil {
-		return metadata{}, err
-	}
-	if raw == nil {
-		raw = map[string]any{}
-	}
-	m := metadata{Extensions: map[string]any{}}
-	for k, v := range raw {
-		key := normalizeKey(k)
-		switch key {
-		case "name":
-			m.Name = asString(v)
-		case "type":
-			m.Type = strings.ToLower(asString(v))
-		case "description":
-			m.Description = asString(v)
-		case "engine":
-			m.Engine = strings.ToLower(asString(v))
-		case "run_as":
-			m.RunAs = strings.ToLower(asString(v))
-		case "blocking":
-			m.Blocking = asBool(v)
-		case "pattern":
-			m.Pattern = filepath.ToSlash(asString(v))
-		case "ignore", "exclude":
-			m.Ignore = append(m.Ignore, asStringSlice(v)...)
-		case "phase":
-			m.Phase = strings.ToLower(strings.TrimSpace(asString(v)))
-		case "subagent":
-			m.Subagent = asString(v)
-		case "language_id", "language":
-			m.LanguageID = asString(v)
-		case "min_severity", "minimum_severity":
-			m.MinSeverity = strings.ToLower(asString(v))
-		default:
-			m.Extensions[key] = v
-		}
+// knownFields are the keys metadataFrom consumes, and so the ones held back
+// from Extensions. Aliases are listed too: a file that wrote `exclude` has had
+// it read, and repeating it as an extension would report it as unrecognized.
+var knownFields = []string{
+	"name", "type", "description", "engine", "run_as", "blocking",
+	"pattern", "ignore", "exclude", "phase", "subagent",
+	"language_id", "language", "min_severity", "minimum_severity",
+}
+
+func metadataFrom(fields frontmatter.Fields) metadata {
+	m := metadata{
+		Name:        fields.String("name"),
+		Type:        strings.ToLower(fields.String("type")),
+		Description: fields.String("description"),
+		Engine:      strings.ToLower(fields.String("engine")),
+		RunAs:       strings.ToLower(fields.String("run_as")),
+		Blocking:    fields.Bool("blocking"),
+		Pattern:     filepath.ToSlash(fields.String("pattern")),
+		Ignore:      fields.Strings("ignore", "exclude"),
+		Phase:       strings.ToLower(fields.String("phase")),
+		Subagent:    fields.String("subagent"),
+		LanguageID:  fields.String("language_id", "language"),
+		MinSeverity: strings.ToLower(fields.String("min_severity", "minimum_severity")),
+		Extensions:  fields.Except(knownFields...),
 	}
 	for i := range m.Ignore {
-		m.Ignore[i] = filepath.ToSlash(strings.TrimSpace(m.Ignore[i]))
+		m.Ignore[i] = filepath.ToSlash(m.Ignore[i])
 	}
-	m.Ignore = compactStrings(m.Ignore)
-	return m, nil
-}
-
-func normalizeKey(k string) string {
-	k = strings.TrimSpace(strings.ToLower(k))
-	k = strings.ReplaceAll(k, "-", "_")
-	return k
-}
-
-func asString(v any) string {
-	switch t := v.(type) {
-	case string:
-		return strings.TrimSpace(t)
-	case fmt.Stringer:
-		return strings.TrimSpace(t.String())
-	case nil:
-		return ""
-	default:
-		return strings.TrimSpace(fmt.Sprint(t))
+	if m.Extensions == nil {
+		m.Extensions = map[string]any{}
 	}
+	return m
 }
 
-func asBool(v any) bool {
-	switch t := v.(type) {
-	case bool:
-		return t
-	case string:
-		switch strings.ToLower(strings.TrimSpace(t)) {
-		case "true", "yes", "y", "on", "1":
-			return true
-		}
-	case int, int64, uint64:
-		return fmt.Sprint(t) != "0"
-	}
-	return false
-}
-
-func asStringSlice(v any) []string {
-	switch t := v.(type) {
-	case []any:
-		out := make([]string, 0, len(t))
-		for _, item := range t {
-			out = append(out, asString(item))
-		}
-		return out
-	case []string:
-		return t
-	case string:
-		if strings.TrimSpace(t) == "" {
-			return nil
-		}
-		return []string{t}
-	default:
-		if s := asString(t); s != "" {
-			return []string{s}
-		}
-		return nil
-	}
-}
-
-func compactStrings(in []string) []string {
-	out := in[:0]
-	for _, s := range in {
-		if s = strings.TrimSpace(s); s != "" {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
-func buildHook(rel, abs, filename string, data []byte, mode fs.FileMode, pf parsedFrontMatter, m metadata) (hooks.Hook, error) {
-	id := NormalizeID(filename)
+func buildHook(rel, abs, filename string, data []byte, mode fs.FileMode, pf frontmatter.Parsed, m metadata) (hooks.Hook, error) {
+	id := frontmatter.NormalizeID(filename)
 	if id == "" {
 		return hooks.Hook{}, fieldError(rel, "id", "filename cannot produce stable hook ID")
 	}
 	name := strings.TrimSpace(m.Name)
 	if name == "" {
-		name = DefaultName(filename)
+		name = frontmatter.DefaultName(filename)
 	}
 	engine := hooks.HookEngine(m.Engine)
 	if engine == "" {
@@ -422,14 +265,14 @@ func buildHook(rel, abs, filename string, data []byte, mode fs.FileMode, pf pars
 		Type: hooks.HookType(m.Type), Engine: engine, RunAs: runAs, Blocking: m.Blocking,
 		Pattern: m.Pattern, Ignore: m.Ignore, Phase: m.Phase,
 		Subagent: m.Subagent, LanguageID: m.LanguageID, MinSeverity: m.MinSeverity,
-		AbsPath: abs, RelPath: rel, HasShebang: pf.hasShebang,
+		AbsPath: abs, RelPath: rel, HasShebang: pf.HasShebang,
 		Executable: mode&0111 != 0, Extensions: m.Extensions,
 	}
 	if len(h.Extensions) == 0 {
 		h.Extensions = nil
 	}
 	if h.Engine == hooks.HookEngineAI {
-		h.Prompt = strings.TrimSpace(pf.body)
+		h.Prompt = strings.TrimSpace(pf.Body)
 	}
 	if err := validateHook(h, data); err != nil {
 		return hooks.Hook{}, err
@@ -465,7 +308,7 @@ func validateHook(h hooks.Hook, data []byte) error {
 		}
 	}
 	if h.Engine == hooks.HookEngineScript {
-		if !hasFirstLineShebang(data) {
+		if !frontmatter.HasShebangLine(data) {
 			return fieldError(h.RelPath, "shebang", "script hooks require shebang as first line")
 		}
 		if runtime.GOOS != "windows" && !h.Executable {
@@ -473,7 +316,7 @@ func validateHook(h hooks.Hook, data []byte) error {
 		}
 	}
 	if h.Engine == hooks.HookEngineLSP {
-		if !hasFirstLineShebang(data) {
+		if !frontmatter.HasShebangLine(data) {
 			return fieldError(h.RelPath, "shebang", "lsp hooks require shebang as first line")
 		}
 		if runtime.GOOS != "windows" && !h.Executable {
@@ -492,41 +335,4 @@ func validateHook(h hooks.Hook, data []byte) error {
 		}
 	}
 	return nil
-}
-
-func hasFirstLineShebang(data []byte) bool {
-	return bytes.HasPrefix(data, []byte("#!"))
-}
-
-// NormalizeID returns the stable filename-derived hook ID.
-func NormalizeID(filename string) string {
-	base := filepath.Base(filename)
-	if ext := strings.ToLower(filepath.Ext(base)); ext != "" {
-		if _, ok := commonHookExts[ext]; ok {
-			base = strings.TrimSuffix(base, filepath.Ext(base))
-		}
-	}
-	base = strings.ToLower(base)
-	base = strings.Trim(hookIDNonAlnum.ReplaceAllString(base, "-"), "-")
-	base = hookIDOrderPrefix.ReplaceAllString(base, "")
-	return strings.Trim(base, "-")
-}
-
-// DefaultName returns a readable filename-derived hook name.
-func DefaultName(filename string) string {
-	id := NormalizeID(filename)
-	if id == "" {
-		return ""
-	}
-	parts := strings.Split(id, "-")
-	for i, p := range parts {
-		if p == "" {
-			continue
-		}
-		if _, err := fmt.Sscanf(p, "%d", new(int)); err == nil {
-			continue
-		}
-		parts[i] = strings.ToUpper(p[:1]) + p[1:]
-	}
-	return strings.Join(parts, " ")
 }

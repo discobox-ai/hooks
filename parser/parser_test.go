@@ -9,8 +9,13 @@ import (
 	"testing"
 
 	hooks "github.com/discobox-ai/hooks"
+	"github.com/discobox-ai/x/frontmatter"
 )
 
+// The id is frontmatter's to derive, but it is this package's to depend on:
+// status and run history reference hook IDs, so a change to normalization
+// upstream is a data migration here. This is the contract test that catches
+// one.
 func TestNormalizeID(t *testing.T) {
 	tests := map[string]string{
 		"go-check.sh":         "go-check",
@@ -22,7 +27,7 @@ func TestNormalizeID(t *testing.T) {
 		"!!!.sh":              "",
 	}
 	for in, want := range tests {
-		if got := NormalizeID(in); got != want {
+		if got := frontmatter.NormalizeID(in); got != want {
 			t.Fatalf("NormalizeID(%q) = %q, want %q", in, got, want)
 		}
 	}

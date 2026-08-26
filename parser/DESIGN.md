@@ -55,7 +55,20 @@ Review changed Go files for correctness and test coverage.
 
 ## Front Matter Delimiters
 
-Support the Discobot-compatible delimiter forms:
+The file format itself — the delimiters, the shebang allowance, the metadata
+block, and the filename-derived id — is
+[`discobox-ai/x/frontmatter`](https://github.com/discobox-ai/x/tree/main/frontmatter),
+not this package. The same format is read by service definitions in
+`discobox-ai/discobox`, and a delimiter table per reader is a second answer to
+what such a file looks like. This package owns what the fields *mean*: which
+are required, which values are valid, which spellings are aliases, and what a
+missing one defaults to.
+
+The id `frontmatter` derives is a stable identifier here — status and run
+history reference hook IDs — so `parser_test.go` keeps a contract test over it
+rather than trusting the dependency not to drift.
+
+The forms `frontmatter` supports, all Discobot-compatible:
 
 - plain: `---`
 - shell/comment: `#---`
