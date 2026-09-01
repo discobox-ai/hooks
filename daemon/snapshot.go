@@ -159,9 +159,7 @@ func (r *runtimeState) workspaceSnapshotTempDir() (string, error) {
 }
 
 func workspaceSnapshotCandidates(ctx context.Context, repoRoot string) ([]workspaceSnapshotCandidate, error) {
-	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain=v1", "-z", "--untracked-files=all")
-	cmd.Dir = repoRoot
-	out, err := cmd.Output()
+	out, err := gitCommand(ctx, repoRoot, "status", "--porcelain=v1", "-z", "--untracked-files=all").Output()
 	if err != nil {
 		return nil, err
 	}
@@ -239,9 +237,7 @@ func workspaceSnapshotCandidateAllowed(ctx context.Context, repoRoot string, can
 
 func gitBlobSize(ctx context.Context, repoRoot, rev, path string) (int64, bool) {
 	//nolint:gosec // Arguments are passed directly to git, not through a shell; path comes from git status output.
-	cmd := exec.CommandContext(ctx, "git", "cat-file", "-s", rev+":"+path)
-	cmd.Dir = repoRoot
-	out, err := cmd.Output()
+	out, err := gitCommand(ctx, repoRoot, "cat-file", "-s", rev+":"+path).Output()
 	if err != nil {
 		return 0, false
 	}
@@ -250,8 +246,7 @@ func gitBlobSize(ctx context.Context, repoRoot, rev, path string) (int64, bool) 
 }
 
 func snapshotGitOutput(ctx context.Context, dir string, extraEnv map[string]string, stdin []byte, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = dir
+	cmd := gitCommand(ctx, dir, args...)
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}

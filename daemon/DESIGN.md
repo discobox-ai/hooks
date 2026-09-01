@@ -122,6 +122,22 @@ pattern matching. If both daemon-level and matcher-level ignore checks fail, the
 batch may enqueue hooks for paths that would otherwise have been ignored; the
 audit event is the operator signal that the daemon ran fail-open.
 
+## Git Invocation Policy
+
+Every git call the daemon makes goes through `gitCommand`. The daemon reads git
+state on background timers against a repository someone is actively working in,
+so it must never contend for that repository's locks:
+
+- `--no-optional-locks` is always passed. Without it `git status` takes
+  `.git/index.lock` to write back an index it refreshed on the way past, which
+  races the user's own git commands and strands the lock file if that git dies
+  mid-write. Locks git genuinely needs are unaffected, including the one
+  snapshot capture's `git add` takes on its temporary `GIT_INDEX_FILE`.
+- Cancellation terminates the child rather than SIGKILLing it, so git's own
+  lockfile signal handlers get to remove whatever it did lock. `r.ctx` is
+  cancelled on idle shutdown, so this path runs routinely, not just on crashes.
+  `gitTerminateGrace` bounds how long a git that ignores the signal may linger.
+
 ## Watch Snapshot Checkpoint
 
 The daemon persists the watcher's full post-diff snapshot in `watched_files`.

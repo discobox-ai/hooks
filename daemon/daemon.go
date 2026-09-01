@@ -834,9 +834,7 @@ func initialWorkingTreeChanges(ctx context.Context, repoRoot string) []watcher.C
 	if gitOutput(ctx, repoRoot, "rev-parse", "--verify", "HEAD") == "" {
 		return nil
 	}
-	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain=v1", "-z", "--untracked-files=all")
-	cmd.Dir = repoRoot
-	out, err := cmd.Output()
+	out, err := gitCommand(ctx, repoRoot, "status", "--porcelain=v1", "-z", "--untracked-files=all").Output()
 	if err != nil || len(out) == 0 {
 		return nil
 	}
@@ -1003,9 +1001,7 @@ func (r *runtimeState) recordObservedChanges(ctx context.Context, changes []watc
 }
 
 func gitOutput(ctx context.Context, repoRoot string, args ...string) string {
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = repoRoot
-	out, err := cmd.Output()
+	out, err := gitCommand(ctx, repoRoot, args...).Output()
 	if err != nil {
 		return ""
 	}
@@ -1032,9 +1028,7 @@ func gitDiffForPath(ctx context.Context, repoRoot, baseCommit, path string, kind
 }
 
 func gitDiffOutput(ctx context.Context, repoRoot string, args ...string) (string, bool) {
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = repoRoot
-	out, err := cmd.CombinedOutput()
+	out, err := gitCommand(ctx, repoRoot, args...).CombinedOutput()
 	if err != nil {
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
