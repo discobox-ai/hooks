@@ -259,12 +259,12 @@ func (m *Manager) RunHook(ctx context.Context, hookID string, req model.RunReque
 			}
 			m.SignalRun()
 		}
-		_ = m.RecordEvent(ctx, "hook.run.skipped", hookID, "", "hook run skipped", map[string]any{"reason": resp.Reason, "force": req.Force, "phase": phase, "enqueued": resp.Enqueued})
+		_ = m.RecordEvent(ctx, "hook.run.skipped", hookID, "", "hook run skipped", map[string]any{"reason": resp.Reason, "force": req.Force, "expanded": req.Expanded, "phase": phase, "enqueued": resp.Enqueued})
 	} else {
 		if phase != "" {
 			m.ActivateHook(hookID)
 		}
-		_ = m.RecordEvent(ctx, "hook.run.requested", hookID, "", "hook run requested", map[string]any{"force": req.Force, "phase": phase, "enqueued": resp.Enqueued})
+		_ = m.RecordEvent(ctx, "hook.run.requested", hookID, "", "hook run requested", map[string]any{"force": req.Force, "expanded": req.Expanded, "phase": phase, "enqueued": resp.Enqueued})
 		m.SignalRun()
 	}
 	return resp, nil

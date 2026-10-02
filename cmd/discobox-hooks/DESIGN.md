@@ -50,13 +50,16 @@ Initial command surface:
 - `daemon status`: show hook daemon status summary.
 - `daemon shutdown`: ask the daemon to exit.
 - `ls` / `list`: list discovered hooks and their state.
-- `run [--session] [--phase PHASE] [--force] [all|hook-id ...]`: request hook
-  runs. Without hook IDs, `run` means queued/failed unphased hooks plus the
-  default `review` phase; `--phase PHASE` means queued/failed unphased hooks
-  plus that phase. `all` is still queued/failed only unless `--force` is set.
-  `--force` expands the target set to every matching hook. Explicit phase-hook
-  IDs must include the matching `--phase`. `--session all` narrows targets to
-  session hooks.
+- `run [--session] [--phase PHASE[,PHASE...]] [--force] [all|hook-id ...]`:
+  request hook runs. `all` (or no IDs with `--phase`) expands to unphased hooks,
+  or to the selected phases' hooks; `--phase all` selects every hook and
+  `--session` narrows the expansion to session hooks. Explicit IDs always target
+  their hook. Requests for expanded hooks carry `expanded`, so the daemon skips
+  a never-run file hook with nothing queued as `nothing_changed`. Without
+  `--force` the daemon also skips hooks that succeeded or are queued/running,
+  and re-runs failed hooks with the failed run's changed files plus any changes
+  since. `--force` re-runs every selected hook with its latest run's inputs. See
+  the root `DESIGN.md` Execution Semantics.
 - `pause` / `resume`: global execution control.
 - `pause <hook-id>` / `resume <hook-id>`: per-hook execution control.
 - `output [all|hook-id ...]`: print captured output for each selected hook's

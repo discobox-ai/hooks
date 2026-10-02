@@ -137,9 +137,20 @@ explicit hook IDs always target their hook regardless of phase, while the `all`
 ID selector (or an omitted ID list) expands within the phase scope — no
 `--phase` selects unphased hooks, `--phase <p1>,<p2>` selects hooks in those
 phases, and `--phase all` selects every hook. `run` without at least one phase
-or ID selector is an error. The daemon decides per hook whether a requested run
-executes: without `--force` it skips hooks that already succeeded, already ran,
-or are currently running; `--force` re-runs them with their last run's inputs.
+or ID selector is an error. The CLI marks each request for a hook it selected by
+expanding `all` or a phase, rather than one named explicitly, as `expanded`. The
+daemon decides per hook whether a requested run executes. Without `--force`:
+
+- hooks that already succeeded, already ran, or are queued or running are
+  skipped;
+- a failed hook re-runs with the failed run's changed files and observed change
+  IDs, merged with any changes recorded for that hook since that run, so a
+  re-run re-checks what failed instead of running with an empty change list;
+- a file hook that has never run and has no queued changes is skipped with
+  reason `nothing_changed` when the request is `expanded`; naming its ID runs it
+  with an empty change list.
+
+`--force` re-runs any selected hook with its latest run's inputs.
 Session hooks do not run during daemon startup; use the
 CLI's session-hook run mode to trigger session hooks for the current session.
 Failed hooks block future queued hook launches until the failure is resolved by

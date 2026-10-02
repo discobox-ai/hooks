@@ -262,6 +262,10 @@ func (s *Service) SetHookExecution(ctx context.Context, hookID string, req model
 }
 
 // RunHook enqueues a hook if it has not already succeeded, unless Force is set.
+//
+// An unforced run of a failed hook enqueues no inputs of its own: the store
+// replays the failed run's changed files and change IDs into the queued row,
+// merged with any changes recorded for the hook since that run.
 func (s *Service) RunHook(ctx context.Context, hookID string, req model.RunRequest) (model.RunResponse, error) {
 	h, ok := s.hookSet.HookByID(hookID)
 	if !ok {
@@ -270,7 +274,7 @@ func (s *Service) RunHook(ctx context.Context, hookID string, req model.RunReque
 	if h.IsLSP() {
 		return model.RunResponse{HookID: hookID, Skipped: true, Reason: "lsp_hooks_run_continuously"}, nil
 	}
-	shouldRun, reason, err := s.shouldRunHook(ctx, hookID, req.Force)
+	shouldRun, reason, err := s.shouldRunHook(ctx, h, req)
 	if err != nil {
 		return model.RunResponse{}, err
 	}
@@ -315,8 +319,8 @@ func (s *Service) GlobalPaused(ctx context.Context) (bool, error) {
 	return ok && v == "true", err
 }
 
-func (s *Service) shouldRunHook(ctx context.Context, id string, force bool) (bool, string, error) {
-	if force {
+func (s *Service) shouldRunHook(ctx context.Context, h hooks.Hook, req model.RunRequest) (bool, string, error) {
+	if req.Force {
 		return true, "", nil
 	}
 	rows, err := s.store.ListStatus(ctx)
@@ -324,12 +328,17 @@ func (s *Service) shouldRunHook(ctx context.Context, id string, force bool) (boo
 		return false, "", err
 	}
 	for _, row := range rows {
-		if row.Hook.ID != id {
+		if row.Hook.ID != h.ID {
 			continue
 		}
 		switch row.Status {
 		case models.StatusIdle:
 			if row.RunCount == 0 {
+				// Idle means nothing is queued: a file hook selected by an
+				// aggregate selector has no changed files to check.
+				if req.Expanded && h.Type == hooks.HookTypeFile {
+					return false, "nothing_changed", nil
+				}
 				return true, "", nil
 			}
 			return false, "already_ran", nil

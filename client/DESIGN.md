@@ -37,9 +37,9 @@ client can hide the transport behind typed methods such as:
 If a lighter JSON-RPC protocol is chosen later, keep this package as the only
 transport boundary so CLI commands do not depend on protocol details.
 
-`RunHook` carries both `force` and optional `phase` in its request body. The
-client only serializes the phase selected by the CLI or caller; service/manager
-own validation and phase activation.
+`RunHook` carries `force` and, for hooks the caller selected by expanding `all`
+or a phase, `expanded` in its request body. Service/manager own the skip/force
+decision and phase activation.
 
 ## Version Handshake
 

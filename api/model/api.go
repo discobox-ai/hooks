@@ -215,6 +215,9 @@ type ExecutionResponse struct {
 // RunRequest is accepted by POST /hooks/{id}/run.
 type RunRequest struct {
 	Force bool `json:"force"`
+	// Expanded reports that the caller selected the hook by expanding an
+	// aggregate selector (`all` or a phase) rather than naming it explicitly.
+	Expanded bool `json:"expanded,omitempty"`
 }
 
 // RunResponse is returned by POST /hooks/{id}/run.

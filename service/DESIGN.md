@@ -7,7 +7,10 @@
 
 - Translate API request DTOs into store operations.
 - Return API response DTOs or raw `model` values wrapped by API DTOs.
-- Enforce API-level hook behavior such as manual `run` skip/force semantics.
+- Enforce API-level hook behavior such as manual `run` skip/force semantics,
+  including skipping a never-run file hook with nothing queued (`nothing_changed`)
+  when the request is `expanded`. Failed-run input replay for unforced re-runs
+  is owned by the store's enqueue carry-forward.
 - Enforce phase targeting for manual runs: phase hooks require a matching
   request phase before they can be enqueued.
 - Keep HTTP parsing, status codes, and socket routing in `daemon`.

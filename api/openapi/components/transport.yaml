@@ -290,6 +290,12 @@ RunRequest:
   properties:
     force:
       type: boolean
+    expanded:
+      type: boolean
+      description: >-
+        True when the caller selected this hook by expanding an aggregate
+        selector (`all` or a phase) rather than naming it. A never-run file
+        hook with nothing queued is skipped for an expanded, unforced request.
 RunResponse:
   type: object
   required: [enqueued, hook_id]

@@ -115,12 +115,14 @@ func KnownEventTypes() []EventTypeInfo {
 		}},
 		{Type: "hook.run.requested", Description: "A client requested a hook run.", Details: []EventDetailInfo{
 			{Name: "force", Description: "whether the request bypassed normal skip checks", Required: true},
+			{Name: "expanded", Description: "whether the hook was selected by expanding `all` or a phase selector rather than named"},
 			{Name: "phase", Description: "phase requested for the run, when phase-targeted"},
 			{Name: "enqueued", Description: "whether a queued run was enqueued", Required: true},
 		}},
 		{Type: "hook.run.skipped", Description: "A requested hook run was skipped, usually because it already succeeded and was not forced.", Details: []EventDetailInfo{
 			{Name: "reason", Description: "skip reason", Required: true},
 			{Name: "force", Description: "whether the request used force", Required: true},
+			{Name: "expanded", Description: "whether the hook was selected by expanding `all` or a phase selector rather than named"},
 			{Name: "phase", Description: "phase requested for the run, when phase-targeted"},
 			{Name: "enqueued", Description: "whether a queued run was enqueued", Required: true},
 		}},

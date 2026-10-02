@@ -112,6 +112,12 @@ echo "changed=$DISCOBOX_CHANGED_FILES"
 		t.Fatalf("expected hook resumed")
 	}
 
+	var nothingChanged RunResponse
+	doJSON(t, client, http.MethodPost, "http://unix/hooks/echo/run", RunRequest{Expanded: true}, &nothingChanged)
+	if !nothingChanged.Skipped || nothingChanged.Reason != "nothing_changed" {
+		t.Fatalf("expected expanded run of never-run file hook to skip, got %+v", nothingChanged)
+	}
+
 	var runResp RunResponse
 	doJSON(t, client, http.MethodPost, "http://unix/hooks/echo/run", RunRequest{}, &runResp)
 	if !runResp.Enqueued || runResp.HookID != "echo" {

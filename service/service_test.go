@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	hooks "github.com/discobox-ai/hooks"
@@ -63,6 +64,117 @@ func TestRunHookSkipsAfterSuccessUnlessForced(t *testing.T) {
 	}
 	if pending == nil || len(pending.ChangedFiles) != 1 || pending.ChangedFiles[0].Path != "old.go" {
 		t.Fatalf("expected forced run to copy previous inputs, got %#v", pending)
+	}
+}
+
+func TestRunHookReplaysFailedRunInputs(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		req  model.RunRequest
+	}{
+		{name: "explicit", req: model.RunRequest{}},
+		{name: "expanded", req: model.RunRequest{Expanded: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			svc, st := newTestServiceWithHooks(ctx, t, fileHook("vet"))
+			if err := st.EnqueueWithChangeIDs(ctx, []string{"vet"}, []models.ChangedFile{{Path: "bad.go", Kind: watcher.Modified}}, []string{"c1"}); err != nil {
+				t.Fatalf("enqueue: %v", err)
+			}
+			failRun(ctx, t, st, "vet")
+
+			resp, err := svc.RunHook(ctx, "vet", tc.req)
+			if err != nil {
+				t.Fatalf("run hook: %v", err)
+			}
+			if !resp.Enqueued || resp.Skipped {
+				t.Fatalf("expected failed hook to be re-enqueued, got %#v", resp)
+			}
+			requirePending(ctx, t, st, "vet", []string{"bad.go"}, []string{"c1"})
+		})
+	}
+}
+
+func TestRunHookMergesChangesRecordedSinceFailedRun(t *testing.T) {
+	ctx := context.Background()
+	svc, st := newTestServiceWithHooks(ctx, t, fileHook("vet"), fileHook("fmt"))
+
+	// vet: a change lands while the failing run is in flight.
+	if err := st.EnqueueWithChangeIDs(ctx, []string{"vet"}, []models.ChangedFile{{Path: "a.go", Kind: watcher.Modified}}, []string{"c1"}); err != nil {
+		t.Fatalf("enqueue vet: %v", err)
+	}
+	run, err := st.MarkRunning(ctx, "vet", nil)
+	if err != nil {
+		t.Fatalf("mark running: %v", err)
+	}
+	if err := st.EnqueueWithChangeIDs(ctx, []string{"vet"}, []models.ChangedFile{{Path: "b.go", Kind: watcher.Created}}, []string{"c2"}); err != nil {
+		t.Fatalf("enqueue vet during run: %v", err)
+	}
+	if err := st.FinishRun(ctx, run.ID, models.RunResult{Status: models.StatusFailure, ExitCode: 1}); err != nil {
+		t.Fatalf("finish run: %v", err)
+	}
+	resp, err := svc.RunHook(ctx, "vet", model.RunRequest{Expanded: true})
+	if err != nil {
+		t.Fatalf("run vet: %v", err)
+	}
+	if !resp.Enqueued {
+		t.Fatalf("expected vet enqueue, got %#v", resp)
+	}
+	requirePending(ctx, t, st, "vet", []string{"a.go", "b.go"}, []string{"c1", "c2"})
+
+	// fmt: a change lands after the failed run, which queues the hook again.
+	if err := st.EnqueueWithChangeIDs(ctx, []string{"fmt"}, []models.ChangedFile{{Path: "a.go", Kind: watcher.Modified}}, []string{"c1"}); err != nil {
+		t.Fatalf("enqueue fmt: %v", err)
+	}
+	failRun(ctx, t, st, "fmt")
+	if err := st.EnqueueWithChangeIDs(ctx, []string{"fmt"}, []models.ChangedFile{{Path: "c.go", Kind: watcher.Modified}}, []string{"c3"}); err != nil {
+		t.Fatalf("enqueue fmt after failure: %v", err)
+	}
+	resp, err = svc.RunHook(ctx, "fmt", model.RunRequest{Expanded: true})
+	if err != nil {
+		t.Fatalf("run fmt: %v", err)
+	}
+	if !resp.Skipped || resp.Reason != "already_queued" {
+		t.Fatalf("expected fmt already queued, got %#v", resp)
+	}
+	requirePending(ctx, t, st, "fmt", []string{"a.go", "c.go"}, []string{"c1", "c3"})
+}
+
+func TestRunHookSkipsNeverRunFileHookWithNothingChanged(t *testing.T) {
+	ctx := context.Background()
+	review := hooks.Hook{ID: "review", Name: "Review", Type: hooks.HookTypeSession, Engine: hooks.HookEngineScript}
+	svc, st := newTestServiceWithHooks(ctx, t, fileHook("vet"), fileHook("fmt"), fileHook("lint"), review)
+
+	resp, err := svc.RunHook(ctx, "vet", model.RunRequest{Expanded: true})
+	if err != nil {
+		t.Fatalf("expanded run: %v", err)
+	}
+	if !resp.Skipped || resp.Enqueued || resp.Reason != "nothing_changed" {
+		t.Fatalf("expected nothing_changed skip, got %#v", resp)
+	}
+	if rows, err := st.ListPending(ctx, 0); err != nil || len(rows) != 0 {
+		t.Fatalf("expected nothing queued, got %#v err=%v", rows, err)
+	}
+
+	// Explicit IDs and --force still run a never-run file hook.
+	if resp, err := svc.RunHook(ctx, "vet", model.RunRequest{}); err != nil || !resp.Enqueued {
+		t.Fatalf("explicit run: resp=%#v err=%v", resp, err)
+	}
+	if resp, err := svc.RunHook(ctx, "fmt", model.RunRequest{Expanded: true, Force: true}); err != nil || !resp.Enqueued {
+		t.Fatalf("forced expanded run: resp=%#v err=%v", resp, err)
+	}
+
+	// Pending changes are already queued, not "nothing changed".
+	if err := st.Enqueue(ctx, []string{"lint"}, []models.ChangedFile{{Path: "a.go", Kind: watcher.Modified}}); err != nil {
+		t.Fatalf("enqueue lint: %v", err)
+	}
+	if resp, err := svc.RunHook(ctx, "lint", model.RunRequest{Expanded: true}); err != nil || resp.Reason != "already_queued" {
+		t.Fatalf("expanded run with pending changes: resp=%#v err=%v", resp, err)
+	}
+
+	// Session hooks have no change list to scope to and still run.
+	if resp, err := svc.RunHook(ctx, "review", model.RunRequest{Expanded: true}); err != nil || !resp.Enqueued {
+		t.Fatalf("expanded session run: resp=%#v err=%v", resp, err)
 	}
 }
 
@@ -131,18 +243,64 @@ func TestHookOperationsReturnNotFound(t *testing.T) {
 
 func newTestService(ctx context.Context, t *testing.T) (*Service, *store.Store) {
 	t.Helper()
+	return newTestServiceWithHooks(ctx, t, hooks.Hook{ID: "lint", Name: "Lint", Type: hooks.HookTypeSession, Engine: hooks.HookEngineScript})
+}
+
+func newTestServiceWithHooks(ctx context.Context, t *testing.T, defs ...hooks.Hook) (*Service, *store.Store) {
+	t.Helper()
 	st, err := store.Open(ctx, store.Options{Path: filepath.Join(t.TempDir(), "hooks.db")})
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	hook := hooks.Hook{ID: "lint", Name: "Lint", Type: hooks.HookTypeSession, Engine: hooks.HookEngineScript}
-	if err := st.RefreshDefinitions(ctx, []hooks.Hook{hook}); err != nil {
+	if err := st.RefreshDefinitions(ctx, defs); err != nil {
 		t.Fatalf("refresh definitions: %v", err)
 	}
-	svc, err := New(Config{Store: st, HookSet: testHookSet{"lint": hook}})
+	set := testHookSet{}
+	for _, def := range defs {
+		set[def.ID] = def
+	}
+	svc, err := New(Config{Store: st, HookSet: set})
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
 	return svc, st
+}
+
+func fileHook(id string) hooks.Hook {
+	return hooks.Hook{ID: id, Name: id, Type: hooks.HookTypeFile, Engine: hooks.HookEngineScript, Pattern: "**/*.go"}
+}
+
+// failRun runs hookID from its queued inputs and records a failure.
+func failRun(ctx context.Context, t *testing.T, st *store.Store, hookID string) {
+	t.Helper()
+	run, err := st.MarkRunning(ctx, hookID, nil)
+	if err != nil {
+		t.Fatalf("mark running: %v", err)
+	}
+	if err := st.FinishRun(ctx, run.ID, models.RunResult{Status: models.StatusFailure, ExitCode: 1}); err != nil {
+		t.Fatalf("finish run: %v", err)
+	}
+}
+
+func requirePending(ctx context.Context, t *testing.T, st *store.Store, hookID string, wantPaths []string, wantIDs []string) {
+	t.Helper()
+	rows, err := st.ListPending(ctx, 0)
+	if err != nil {
+		t.Fatalf("list pending: %v", err)
+	}
+	for _, row := range rows {
+		if row.HookID != hookID {
+			continue
+		}
+		paths := make([]string, 0, len(row.ChangedFiles))
+		for _, f := range row.ChangedFiles {
+			paths = append(paths, f.Path)
+		}
+		if strings.Join(paths, ",") != strings.Join(wantPaths, ",") || strings.Join(row.ChangeIDs, ",") != strings.Join(wantIDs, ",") {
+			t.Fatalf("queued %s inputs = %v %v, want %v %v", hookID, paths, row.ChangeIDs, wantPaths, wantIDs)
+		}
+		return
+	}
+	t.Fatalf("expected %s to be queued, got %#v", hookID, rows)
 }

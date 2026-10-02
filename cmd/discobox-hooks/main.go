@@ -266,7 +266,16 @@ func (a *app) newRunCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "run [--phase PHASE[,PHASE...]] [HOOK_ID ...|all]",
 		Short: "Request hook runs",
-		Args:  cobra.ArbitraryArgs,
+		Long: `Request hook runs.
+
+Without --force, hooks that already succeeded, are queued, or are running are
+skipped. A failed hook is re-run with the changed files of the run that failed,
+plus any changes recorded for it since. A file hook that has never run and has
+no queued changes is skipped as nothing_changed when selected by "all" or
+--phase; naming its ID runs it with an empty change list.
+
+--force re-runs every selected hook with its latest run's changed files.`,
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			phaseSet, allPhases := normalizePhaseSelector(phases)
 			explicitIDs, expandAll := splitRunArgs(args)
@@ -289,7 +298,8 @@ func (a *app) newRunCommand() *cobra.Command {
 			}
 			responses := make([]*client.RunResponse, 0, len(ids))
 			for _, id := range ids {
-				resp, err := c.RunHook(cmd.Context(), id, client.RunOptions{Force: force})
+				expanded := expand && !slices.Contains(explicitIDs, id)
+				resp, err := c.RunHook(cmd.Context(), id, client.RunOptions{Force: force, Expanded: expanded})
 				if err != nil {
 					return err
 				}
@@ -311,7 +321,7 @@ func (a *app) newRunCommand() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().BoolVarP(&force, "force", "f", false, "force hooks to run even if they already succeeded")
+	cmd.Flags().BoolVarP(&force, "force", "f", false, "run hooks even if they already succeeded or have nothing changed, reusing their latest run's changed files")
 	cmd.Flags().BoolVar(&sessionHooks, "session", false, "target session hooks")
 	cmd.Flags().StringSliceVar(&phases, "phase", nil, "phase selector for aggregate targeting; repeat or comma-separate, \"all\" selects every phase")
 	return cmd

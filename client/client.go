@@ -583,6 +583,9 @@ func (c *Client) RunHook(ctx context.Context, id string, opts RunOptions) (*RunR
 	}
 	req := hookapigen.RunRequest{}
 	req.Force = hookapigen.NewOptBool(opts.Force)
+	if opts.Expanded {
+		req.Expanded = hookapigen.NewOptBool(true)
+	}
 	res, err := generated.HooksRunHook(ctx, hookapigen.NewOptRunRequest(req), hookapigen.HooksRunHookParams{HookId: id})
 	if err != nil {
 		return nil, classifyError(c.socketPath, err)
@@ -774,6 +777,9 @@ type Diagnostic = model.Diagnostic
 
 type RunOptions struct {
 	Force bool
+	// Expanded marks a hook selected by expanding `all` or a phase selector
+	// rather than named explicitly.
+	Expanded bool
 }
 
 type RunResponse = model.RunResponse

@@ -1659,6 +1659,10 @@ func (s *RunAs) UnmarshalText(data []byte) error {
 // Ref: #/RunRequest
 type RunRequest struct {
 	Force OptBool `json:"force"`
+	// True when the caller selected this hook by expanding an aggregate selector (`all` or a phase)
+	// rather than naming it. A never-run file hook with nothing queued is skipped for an expanded,
+	// unforced request.
+	Expanded OptBool `json:"expanded"`
 }
 
 // GetForce returns the value of Force.
@@ -1666,9 +1670,19 @@ func (s *RunRequest) GetForce() OptBool {
 	return s.Force
 }
 
+// GetExpanded returns the value of Expanded.
+func (s *RunRequest) GetExpanded() OptBool {
+	return s.Expanded
+}
+
 // SetForce sets the value of Force.
 func (s *RunRequest) SetForce(val OptBool) {
 	s.Force = val
+}
+
+// SetExpanded sets the value of Expanded.
+func (s *RunRequest) SetExpanded(val OptBool) {
+	s.Expanded = val
 }
 
 // Ref: #/RunResponse

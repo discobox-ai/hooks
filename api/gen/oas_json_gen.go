@@ -3535,10 +3535,17 @@ func (s *RunRequest) encodeFields(e *jx.Encoder) {
 			s.Force.Encode(e)
 		}
 	}
+	{
+		if s.Expanded.Set {
+			e.FieldStart("expanded")
+			s.Expanded.Encode(e)
+		}
+	}
 }
 
-var jsonFieldsNameOfRunRequest = [1]string{
+var jsonFieldsNameOfRunRequest = [2]string{
 	0: "force",
+	1: "expanded",
 }
 
 // Decode decodes RunRequest from json.
@@ -3558,6 +3565,16 @@ func (s *RunRequest) Decode(d *jx.Decoder) error {
 				return nil
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"force\"")
+			}
+		case "expanded":
+			if err := func() error {
+				s.Expanded.Reset()
+				if err := s.Expanded.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"expanded\"")
 			}
 		default:
 			return d.Skip()
