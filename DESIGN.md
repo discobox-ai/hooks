@@ -150,6 +150,11 @@ daemon decides per hook whether a requested run executes. Without `--force`:
   reason `nothing_changed` when the request is `expanded`; naming its ID runs it
   with an empty change list.
 
+Skip decisions read queued state only. Edits still inside the watcher's
+quiet-period batch are not queued yet, so a run request made right after an edit
+can skip a phase hook (`nothing_changed` or `already_succeeded`), and that hook
+waits for the next run of its phase once the batch is queued.
+
 `--force` re-runs any selected hook with its latest run's inputs.
 Session hooks do not run during daemon startup; use the
 CLI's session-hook run mode to trigger session hooks for the current session.
