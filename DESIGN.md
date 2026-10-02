@@ -118,7 +118,8 @@ Use a two-level stability model:
 1. The filesystem watcher coalesces low-level editor/kernel noise into stable
    tree change batches.
 2. The hook scheduler applies a five-second quiet-period debounce before matching
-   hooks and enqueueing work.
+   hooks and enqueueing work. A run request, or the release of an active phase,
+   ends the quiet period early (see Execution Semantics).
 
 If file changes keep arriving continuously, add a maximum batch window before
 running a batch so hook execution cannot be starved forever.
@@ -150,10 +151,14 @@ daemon decides per hook whether a requested run executes. Without `--force`:
   reason `nothing_changed` when the request is `expanded`; naming its ID runs it
   with an empty change list.
 
-Skip decisions read queued state only. Edits still inside the watcher's
-quiet-period batch are not queued yet, so a run request made right after an edit
-can skip a phase hook (`nothing_changed` or `already_succeeded`), and that hook
-waits for the next run of its phase once the batch is queued.
+A run request ends the quiet period early: before deciding, the daemon queues
+every edit the watcher has already reported, so a run made right after an edit
+sees it. Likewise, before releasing hooks activated by a phase run, the daemon
+queues held edits and runs any that match under the still-active phase. Edits
+after that go through the normal quiet-period batching, and edits that land
+while a hook runs queue a follow-up run. Without a run request or an active
+phase, edits still wait for the quiet period. An edit saved within the watcher's
+own stability window (about 200ms) of the request is not reported yet.
 
 `--force` re-runs any selected hook with its latest run's inputs.
 Session hooks do not run during daemon startup; use the

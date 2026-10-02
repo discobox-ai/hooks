@@ -19,6 +19,7 @@ import (
 	"time"
 
 	hooks "github.com/discobox-ai/hooks"
+	hookapigen "github.com/discobox-ai/hooks/api/gen"
 	"github.com/discobox-ai/hooks/api/model"
 	"github.com/discobox-ai/hooks/lspclient"
 	"github.com/discobox-ai/hooks/manager"
@@ -349,6 +350,114 @@ echo session
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("daemon did not shut down")
+	}
+}
+
+// newPhaseRuntime builds a runtime for a git repo with one never-run phase file
+// hook, "review", that watches *.go and succeeds.
+func newPhaseRuntime(ctx context.Context, t *testing.T) (*runtimeState, *hookstore.Store, *manager.Manager) {
+	t.Helper()
+	repo := t.TempDir()
+	gitTestCommand(t, repo, "init")
+	hookPath := filepath.Join(t.TempDir(), "review.sh")
+	if err := os.WriteFile(hookPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hook := hooks.Hook{ID: "review", Name: "Review", Type: hooks.HookTypeFile, Engine: hooks.HookEngineScript, Phase: "review", Pattern: "*.go", AbsPath: hookPath, HasShebang: true, Executable: true}
+
+	dbPath := filepath.Join(t.TempDir(), "hooks.db")
+	st, err := hookstore.Open(ctx, hookstore.Options{Path: dbPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if err := st.RefreshDefinitions(ctx, []hooks.Hook{hook}); err != nil {
+		t.Fatal(err)
+	}
+	rctx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+	r := &runtimeState{cfg: Config{SessionID: "phase-flush-test", RepoRoot: repo, DBPath: dbPath}, store: st, discovery: &parser.Discovery{Hooks: []hooks.Hook{hook}}, ctx: rctx, cancel: cancel, drainSignal: make(chan struct{}, 1), snapshotSignal: make(chan struct{}, 1)}
+	mgr, err := manager.New(manager.Config{Store: st, Hooks: []hooks.Hook{hook}, SessionID: "phase-flush-test", RepoRoot: repo, Cancel: cancel, SignalRun: r.signalDrain})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.manager = mgr
+	return r, st, mgr
+}
+
+func TestRunRequestQueuesChangesHeldForQuietPeriod(t *testing.T) {
+	ctx := context.Background()
+	r, st, mgr := newPhaseRuntime(ctx, t)
+	h := &generatedHandler{manager: mgr, flushChanges: r.flushBatch}
+
+	// The watcher reported an edit that is still inside the quiet period.
+	r.addBatch([]watcher.Change{{Path: "main.go", Kind: watcher.Modified}}, nil)
+
+	req := hookapigen.NewOptRunRequest(hookapigen.RunRequest{Expanded: hookapigen.NewOptBool(true)})
+	res, err := h.HooksRunHook(ctx, req, hookapigen.HooksRunHookParams{HookId: "review"})
+	if err != nil {
+		t.Fatalf("run hook: %v", err)
+	}
+	resp, ok := res.(*hookapigen.RunResponse)
+	if !ok {
+		t.Fatalf("unexpected run response %T", res)
+	}
+	if reason, _ := resp.Reason.Get(); reason == "nothing_changed" {
+		t.Fatalf("run request ignored the held edit: %#v", resp)
+	}
+	if r.hasBatch() {
+		t.Fatal("run request left the edit in the quiet-period batch")
+	}
+	pending, err := st.NextPendingExcluding(ctx, mgr.ActiveHookIDs(), nil)
+	if err != nil {
+		t.Fatalf("next pending: %v", err)
+	}
+	if pending == nil || pending.HookID != "review" || len(pending.ChangedFiles) != 1 || pending.ChangedFiles[0].Path != "main.go" {
+		t.Fatalf("expected review queued with main.go and runnable under its phase, got %#v", pending)
+	}
+}
+
+func TestPhaseReleaseQueuesChangesHeldForQuietPeriod(t *testing.T) {
+	requireExecutableHooks(t)
+	ctx := context.Background()
+	r, st, mgr := newPhaseRuntime(ctx, t)
+
+	if err := st.Enqueue(ctx, []string{"review"}, []models.ChangedFile{{Path: "first.go", Kind: watcher.Modified}}); err != nil {
+		t.Fatal(err)
+	}
+	mgr.ActivateHook("review")
+	if !r.drainOne() {
+		t.Fatal("expected first review run to succeed")
+	}
+
+	// An edit made during that run is still inside the quiet period when the
+	// phase has nothing left to run.
+	r.addBatch([]watcher.Change{{Path: "later.go", Kind: watcher.Created}}, nil)
+	if !r.drainOne() {
+		t.Fatal("expected the held edit to run under the still-active phase")
+	}
+	runs, err := st.ListRuns(ctx, "review", 1)
+	if err != nil {
+		t.Fatalf("list runs: %v", err)
+	}
+	if len(runs) != 1 || len(runs[0].ChangedFiles) != 1 || runs[0].ChangedFiles[0].Path != "later.go" {
+		t.Fatalf("expected second review run over later.go, got %#v", runs)
+	}
+
+	if r.drainOne() {
+		t.Fatal("expected drain to stop with nothing queued")
+	}
+	if active := mgr.ActiveHookIDs(); len(active) != 0 {
+		t.Fatalf("phase stayed active with nothing queued: %v", active)
+	}
+
+	// With no phase active, held edits keep waiting for the quiet period.
+	r.addBatch([]watcher.Change{{Path: "idle.go", Kind: watcher.Modified}}, nil)
+	if r.drainOne() {
+		t.Fatal("expected nothing runnable without an active phase")
+	}
+	if !r.hasBatch() {
+		t.Fatal("drain flushed the quiet-period batch with no phase to release")
 	}
 }
 

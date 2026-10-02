@@ -99,6 +99,10 @@ type runtimeState struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 
+	// flushMu serializes flushBatch, which runs from the scheduler, from run
+	// requests, and from the drain loop; checkpoint writes must land in batch
+	// order.
+	flushMu         sync.Mutex
 	mu              sync.Mutex
 	pendingBatch    []watcher.Change
 	pendingSnapshot map[string]watcher.Entry
@@ -388,7 +392,7 @@ func (r *runtimeState) serve() {
 
 func (r *runtimeState) generatedRoutes() (http.Handler, error) {
 	generated, err := hookapigen.NewServer(
-		&generatedHandler{manager: r.manager, wait: r.wait},
+		&generatedHandler{manager: r.manager, wait: r.wait, flushChanges: r.flushBatch},
 		hookapigen.WithNotFound(func(w http.ResponseWriter, req *http.Request) { http.NotFound(w, req) }),
 		hookapigen.WithMethodNotAllowed(func(w http.ResponseWriter, _ *http.Request, _ string) { methodNotAllowed(w) }),
 	)
@@ -701,7 +705,13 @@ func (r *runtimeState) hasBatch() bool {
 	defer r.mu.Unlock()
 	return len(r.pendingBatch) > 0
 }
+
+// flushBatch records and enqueues the changes held for the quiet period. The
+// scheduler calls it when the quiet period ends; run requests and phase release
+// call it early so their decisions see edits the watcher already reported.
 func (r *runtimeState) flushBatch() {
+	r.flushMu.Lock()
+	defer r.flushMu.Unlock()
 	r.mu.Lock()
 	// watched keeps every path the watcher reported. The checkpoint mirrors the
 	// watcher's snapshot, which tracks git-ignored files too, so it advances on
@@ -1092,6 +1102,15 @@ func (r *runtimeState) nextRunnable() (*store.PendingRow, hooks.Hook, bool) {
 	pending, err := r.store.NextPendingExcluding(r.ctx, activeHookIDs, r.manager.RunningHookIDs())
 	if err != nil {
 		return nil, hooks.Hook{}, false
+	}
+	if pending == nil && len(activeHookIDs) > 0 && r.manager.RunningCount() == 0 && r.hasBatch() {
+		// Activated hooks are about to be released. Queue edits still in the
+		// quiet period first, so edits made during the phase run under it.
+		r.flushBatch()
+		pending, err = r.store.NextPendingExcluding(r.ctx, activeHookIDs, r.manager.RunningHookIDs())
+		if err != nil {
+			return nil, hooks.Hook{}, false
+		}
 	}
 	if pending == nil {
 		if len(activeHookIDs) > 0 {

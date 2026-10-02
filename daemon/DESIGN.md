@@ -11,7 +11,9 @@ session-scoped runtime.
 - Discover `.discobox/hooks` definitions and refresh stored definitions.
 - Leave session hooks idle until an explicit run request.
 - Start the watcher and collect watcher batches.
-- Apply the five-second hook scheduling debounce.
+- Apply the five-second hook scheduling debounce, and end it early when a run
+  request arrives or before releasing hooks activated by a phase run, so those
+  decisions see every edit the watcher has reported.
 - Call matcher to enqueue affected hooks.
 - Drain the hook queue through runner with daemon-configured bounded parallelism.
 - Stop launching new queued hooks after a failed hook while allowing in-flight
