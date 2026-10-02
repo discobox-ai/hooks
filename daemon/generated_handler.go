@@ -18,8 +18,9 @@ type generatedHandler struct {
 	manager *manager.Manager
 	wait    func(context.Context, time.Duration) (model.WaitResponse, error)
 	// flushChanges queues edits held for the quiet period, so a run request
-	// decides on every change the watcher has reported.
-	flushChanges func()
+	// decides on every change the watcher has reported. It may return before a
+	// large batch is queued.
+	flushChanges func(context.Context)
 }
 
 func (h *generatedHandler) HooksPing(ctx context.Context) (*hookapigen.PingResponse, error) {
@@ -155,7 +156,7 @@ func (h *generatedHandler) HooksRunHook(ctx context.Context, req hookapigen.OptR
 		body.Expanded = value.Expanded.Or(false)
 	}
 	if h.flushChanges != nil {
-		h.flushChanges()
+		h.flushChanges(ctx)
 	}
 	resp, err := h.manager.RunHook(ctx, params.HookId, body)
 	if errors.Is(err, service.ErrNotFound) {

@@ -153,8 +153,11 @@ daemon decides per hook whether a requested run executes. Without `--force`:
 
 A run request ends the quiet period early: before deciding, the daemon queues
 every edit the watcher has already reported, so a run made right after an edit
-sees it. Likewise, before releasing hooks activated by a phase run, the daemon
-queues held edits and runs any that match under the still-active phase. Edits
+sees it. The request waits at most two seconds for that; a larger batch (each
+path gets a `git diff`, and LSP hooks are notified) keeps being queued in the
+background while the request decides on what is queued so far. Before releasing
+hooks activated by a phase run, the daemon waits for any such queuing to finish
+and runs matching edits under the still-active phase. Edits
 after that go through the normal quiet-period batching, and edits that land
 while a hook runs queue a follow-up run. Without a run request or an active
 phase, edits still wait for the quiet period. An edit saved within the watcher's

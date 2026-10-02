@@ -388,7 +388,7 @@ func newPhaseRuntime(ctx context.Context, t *testing.T) (*runtimeState, *hooksto
 func TestRunRequestQueuesChangesHeldForQuietPeriod(t *testing.T) {
 	ctx := context.Background()
 	r, st, mgr := newPhaseRuntime(ctx, t)
-	h := &generatedHandler{manager: mgr, flushChanges: r.flushBatch}
+	h := &generatedHandler{manager: mgr, flushChanges: r.flushForRequest}
 
 	// The watcher reported an edit that is still inside the quiet period.
 	r.addBatch([]watcher.Change{{Path: "main.go", Kind: watcher.Modified}}, nil)
@@ -458,6 +458,86 @@ func TestPhaseReleaseQueuesChangesHeldForQuietPeriod(t *testing.T) {
 	}
 	if !r.hasBatch() {
 		t.Fatal("drain flushed the quiet-period batch with no phase to release")
+	}
+}
+
+func TestRunRequestFlushWaitIsBounded(t *testing.T) {
+	ctx := context.Background()
+	r, st, mgr := newPhaseRuntime(ctx, t)
+	h := &generatedHandler{manager: mgr, flushChanges: r.flushForRequest}
+	prev := requestFlushLimit
+	requestFlushLimit = 50 * time.Millisecond
+	t.Cleanup(func() { requestFlushLimit = prev })
+
+	r.addBatch([]watcher.Change{{Path: "main.go", Kind: watcher.Modified}}, nil)
+	// A slow flush already in progress holds flushMu.
+	r.flushMu.Lock()
+	start := time.Now()
+	req := hookapigen.NewOptRunRequest(hookapigen.RunRequest{Expanded: hookapigen.NewOptBool(true)})
+	res, err := h.HooksRunHook(ctx, req, hookapigen.HooksRunHookParams{HookId: "review"})
+	elapsed := time.Since(start)
+	r.flushMu.Unlock()
+	if err != nil {
+		t.Fatalf("run hook: %v", err)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("run request waited %v for a stalled flush", elapsed)
+	}
+	resp, ok := res.(*hookapigen.RunResponse)
+	if !ok {
+		t.Fatalf("unexpected run response %T", res)
+	}
+	if reason, _ := resp.Reason.Get(); reason != "nothing_changed" {
+		t.Fatalf("expected the request to decide on queued state, got %#v", resp)
+	}
+
+	// The flush the request started finishes in the background.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		rows, err := st.ListPending(ctx, 0)
+		if err != nil {
+			t.Fatalf("list pending: %v", err)
+		}
+		if len(rows) == 1 && len(rows[0].ChangedFiles) == 1 && rows[0].ChangedFiles[0].Path == "main.go" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("background flush never queued main.go")
+}
+
+func TestPhaseReleaseWaitsForFlushInProgress(t *testing.T) {
+	requireExecutableHooks(t)
+	ctx := context.Background()
+	r, st, mgr := newPhaseRuntime(ctx, t)
+
+	if err := st.Enqueue(ctx, []string{"review"}, []models.ChangedFile{{Path: "first.go", Kind: watcher.Modified}}); err != nil {
+		t.Fatal(err)
+	}
+	mgr.ActivateHook("review")
+	if !r.drainOne() {
+		t.Fatal("expected first review run to succeed")
+	}
+
+	// Another flush has taken the batch (nothing is held) but has not queued
+	// it yet when the phase has nothing left to run.
+	r.flushMu.Lock()
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		if err := st.Enqueue(ctx, []string{"review"}, []models.ChangedFile{{Path: "later.go", Kind: watcher.Created}}); err != nil {
+			t.Error(err)
+		}
+		r.flushMu.Unlock()
+	}()
+	if !r.drainOne() {
+		t.Fatal("phase was released before the in-flight flush queued its edit")
+	}
+	runs, err := st.ListRuns(ctx, "review", 1)
+	if err != nil {
+		t.Fatalf("list runs: %v", err)
+	}
+	if len(runs) != 1 || len(runs[0].ChangedFiles) != 1 || runs[0].ChangedFiles[0].Path != "later.go" {
+		t.Fatalf("expected second review run over later.go, got %#v", runs)
 	}
 }
 

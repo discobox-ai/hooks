@@ -392,7 +392,7 @@ func (r *runtimeState) serve() {
 
 func (r *runtimeState) generatedRoutes() (http.Handler, error) {
 	generated, err := hookapigen.NewServer(
-		&generatedHandler{manager: r.manager, wait: r.wait, flushChanges: r.flushBatch},
+		&generatedHandler{manager: r.manager, wait: r.wait, flushChanges: r.flushForRequest},
 		hookapigen.WithNotFound(func(w http.ResponseWriter, req *http.Request) { http.NotFound(w, req) }),
 		hookapigen.WithMethodNotAllowed(func(w http.ResponseWriter, _ *http.Request, _ string) { methodNotAllowed(w) }),
 	)
@@ -704,6 +704,29 @@ func (r *runtimeState) hasBatch() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.pendingBatch) > 0
+}
+
+// requestFlushLimit bounds how long a run request waits for held edits to be
+// queued. A large batch (one git diff per path, LSP notifications) keeps
+// flushing in the background past it, and the request decides on what is
+// queued so far.
+var requestFlushLimit = 2 * time.Second
+
+// flushForRequest queues held edits for an API request, waiting at most
+// requestFlushLimit.
+func (r *runtimeState) flushForRequest(ctx context.Context) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.flushBatch()
+	}()
+	t := time.NewTimer(requestFlushLimit)
+	defer t.Stop()
+	select {
+	case <-done:
+	case <-t.C:
+	case <-ctx.Done():
+	}
 }
 
 // flushBatch records and enqueues the changes held for the quiet period. The
@@ -1103,9 +1126,11 @@ func (r *runtimeState) nextRunnable() (*store.PendingRow, hooks.Hook, bool) {
 	if err != nil {
 		return nil, hooks.Hook{}, false
 	}
-	if pending == nil && len(activeHookIDs) > 0 && r.manager.RunningCount() == 0 && r.hasBatch() {
+	if pending == nil && len(activeHookIDs) > 0 && r.manager.RunningCount() == 0 {
 		// Activated hooks are about to be released. Queue edits still in the
-		// quiet period first, so edits made during the phase run under it.
+		// quiet period first, so edits made during the phase run under it. The
+		// flush is unconditional: it also waits out a flush already in progress,
+		// whose batch is no longer held but not yet queued.
 		r.flushBatch()
 		pending, err = r.store.NextPendingExcluding(r.ctx, activeHookIDs, r.manager.RunningHookIDs())
 		if err != nil {
