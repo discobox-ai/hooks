@@ -136,6 +136,12 @@ eligible for normal draining, while hooks with a phase are returned only when th
 daemon supplies that phase as active. This lets file changes queue phase work
 without auto-running it before an explicit phase run request.
 
+LSP lifecycle errors have no script run row. Queue selection also excludes all
+scripts while an unpaused LSP hook has failure status and a lifecycle error.
+Queued inputs remain intact, including edits enqueued after failure. Retrying or
+pausing the failed LSP hook releases this gate; wait treats the blocked queue as
+settled so check can report the failure.
+
 ## Workspace Snapshot Storage
 
 Workspace snapshots are append-only database records, not Git refs. Each row

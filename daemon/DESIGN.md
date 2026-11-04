@@ -86,6 +86,13 @@ the first change matching the hook pattern; until then the hook stays `idle`. An
 explicit run request (`run <lsp-id>`) also activates an idle server, seeding it
 with the working-tree files matching the hook pattern, and refreshes a running
 one instead of enqueuing script work.
+A startup failure clears the starting state and pending changes, and retains its
+error across later file changes. Only an explicit run (or daemon restart) retries
+that server. The startup worker owns the running-to-terminal status writes; its
+callers must not mark it running after launch. A lifecycle failure blocks queued
+scripts from starting, but wait/check settles once in-flight work finishes and
+reports the failure. A retry or pausing the failed LSP hook releases that gate.
+
 Once running, the daemon opens pattern-matching documents (`didOpen`/`didChange`/
 `didSave`) so the server publishes diagnostics for them, and forwards
 `workspace/didChangeWatchedFiles` for the files the server registered watchers

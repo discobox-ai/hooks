@@ -23,8 +23,8 @@ import (
 	"github.com/discobox-ai/hooks/daemon"
 	"github.com/discobox-ai/hooks/models"
 	"github.com/discobox-ai/hooks/processhelper"
-	idpkg "github.com/discobox-ai/x/id"
 	"github.com/discobox-ai/x/gitutil"
+	idpkg "github.com/discobox-ai/x/id"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -584,6 +584,9 @@ func (a *app) checkOutputs(ctx context.Context, c *client.Client, hooksList []cl
 				return nil, err
 			}
 			output = diagnosticsOutput(diagnostics)
+			if h.LastError != "" {
+				output = h.LastError + "\n" + output
+			}
 		} else if h.LastRunID != "" {
 			b, err := c.Output(ctx, h.Hook.ID)
 			if err != nil {

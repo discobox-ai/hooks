@@ -21,6 +21,7 @@ type lspRuntime struct {
 	client   *lspclient.Client
 	mu       sync.Mutex
 	starting bool
+	failed   bool
 	open     map[string]struct{}
 	pending  []watcher.Change
 }
@@ -80,7 +81,6 @@ func (r *runtimeState) syncLSPHooks() {
 }
 
 func (r *runtimeState) startLSPHook(hook hooks.Hook, rt *lspRuntime) {
-	r.markPendingLSP(hook.ID, lspStartupKey(hook.ID))
 	_ = r.store.SetLSPHookRunning(r.ctx, hook.ID)
 	_ = r.recordEvent("lsp.starting", hook.ID, "", "language server starting", map[string]any{"language_id": hook.LanguageID, "path": hook.RelPath})
 	req := runner.Request{
@@ -117,8 +117,22 @@ func (r *runtimeState) startLSPHook(hook hooks.Hook, rt *lspRuntime) {
 	})
 	if err != nil {
 		msg := err.Error()
-		r.clearPendingLSP(hook.ID, lspStartupKey(hook.ID))
+		// Publish the failure before allowing an explicit retry. File changes
+		// must neither restart a failed server nor erase its lifecycle error.
+		r.mu.Lock()
+		if r.lspClients[hook.ID] != rt {
+			r.mu.Unlock()
+			return
+		}
+		rt.mu.Lock()
 		_ = r.store.SetLSPHookError(context.Background(), hook.ID, msg)
+		rt.starting = false
+		rt.failed = true
+		rt.pending = nil
+		delete(r.pendingLSP, lspPendingKey(hook.ID, lspStartupKey(hook.ID)))
+		r.lastActivity = time.Now().UTC()
+		rt.mu.Unlock()
+		r.mu.Unlock()
 		_ = r.recordEvent("lsp.failed", hook.ID, "", "language server failed", map[string]any{"error": msg})
 		return
 	}
@@ -132,6 +146,7 @@ func (r *runtimeState) startLSPHook(hook hooks.Hook, rt *lspRuntime) {
 	}
 	rt.mu.Lock()
 	rt.client = client
+	rt.starting = false
 	var pending []watcher.Change
 	pending = append(pending, rt.pending...)
 	rt.pending = nil
@@ -173,12 +188,13 @@ func (r *runtimeState) activateLSPHook(hook hooks.Hook, rt *lspRuntime, seed []w
 	if rt.client == nil {
 		launch := !rt.starting
 		rt.starting = true
+		rt.failed = false
 		rt.pending = append(rt.pending, seed...)
 		rt.mu.Unlock()
 		if launch {
+			r.markPendingLSP(hook.ID, lspStartupKey(hook.ID))
 			go r.startLSPHook(hook, rt)
 		}
-		_ = r.store.SetLSPHookRunning(r.ctx, hook.ID)
 		return
 	}
 	rt.mu.Unlock()
@@ -240,6 +256,10 @@ func (r *runtimeState) handleLSPHookChanges(hook hooks.Hook, changes []watcher.C
 	rt.mu.Lock()
 	client := rt.client
 	if client == nil {
+		if rt.failed {
+			rt.mu.Unlock()
+			return
+		}
 		if !rt.starting {
 			// Lazy activation: only start the language server once a change
 			// matches the hook's own pattern. Changes to other files begin
@@ -251,13 +271,12 @@ func (r *runtimeState) handleLSPHookChanges(hook hooks.Hook, changes []watcher.C
 			rt.starting = true
 			rt.pending = append(rt.pending, changes...)
 			rt.mu.Unlock()
+			r.markPendingLSP(hook.ID, lspStartupKey(hook.ID))
 			go r.startLSPHook(hook, rt)
-			_ = r.store.SetLSPHookRunning(r.ctx, hook.ID)
 			return
 		}
 		rt.pending = append(rt.pending, changes...)
 		rt.mu.Unlock()
-		_ = r.store.SetLSPHookRunning(r.ctx, hook.ID)
 		return
 	}
 	rt.mu.Unlock()
