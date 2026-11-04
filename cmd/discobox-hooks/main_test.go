@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1141,5 +1142,25 @@ func TestParseVersion(t *testing.T) {
 		if got != tt.want || ok != tt.ok {
 			t.Fatalf("parseVersion(%q) = (%d, %t), want (%d, %t)", tt.in, got, ok, tt.want, tt.ok)
 		}
+	}
+}
+
+func TestCheckOutputsIncludesLSPLifecycleError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/diagnostics" {
+			t.Errorf("unexpected request: %s", r.URL.Path)
+		}
+		writeTestJSON(t, w, client.DiagnosticsResponse{})
+	}))
+	defer server.Close()
+	c := client.New("", client.WithBaseURL(server.URL), client.WithHTTPClient(server.Client()))
+	outputs, err := (&app{}).checkOutputs(context.Background(), c, []client.HookStatus{{
+		Hook: hooks.Hook{ID: "lsp", Engine: hooks.HookEngineLSP}, Status: models.StatusFailure, LastError: "language server exited: startup broken",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outputs) != 1 || !strings.Contains(outputs[0].Output, "startup broken") {
+		t.Fatalf("missing lifecycle error: %+v", outputs)
 	}
 }

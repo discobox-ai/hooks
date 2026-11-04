@@ -73,6 +73,7 @@ type Client struct {
 	nextID    int
 	done      chan struct{}
 	stderrBuf bytes.Buffer
+	stderrMu  sync.Mutex
 	watchMu   sync.Mutex
 	watchers  map[string][]watchGlob
 }
@@ -258,7 +259,11 @@ func (c *Client) Close() error {
 }
 
 // Stderr returns captured language-server stderr.
-func (c *Client) Stderr() string { return c.stderrBuf.String() }
+func (c *Client) Stderr() string {
+	c.stderrMu.Lock()
+	defer c.stderrMu.Unlock()
+	return c.stderrBuf.String()
+}
 
 func (c *Client) nextDocumentVersion(uri string) int {
 	c.docMu.Lock()
@@ -558,7 +563,18 @@ func uriToAbsPath(uri string) string {
 }
 
 func (c *Client) stderrLoop() {
-	_, _ = io.Copy(&c.stderrBuf, c.stderr)
+	buf := make([]byte, 4096)
+	for {
+		n, err := c.stderr.Read(buf)
+		if n > 0 {
+			c.stderrMu.Lock()
+			_, _ = c.stderrBuf.Write(buf[:n])
+			c.stderrMu.Unlock()
+		}
+		if err != nil {
+			return
+		}
+	}
 }
 
 func (c *Client) handleDiagnostics(raw json.RawMessage) {
@@ -654,7 +670,7 @@ func (c *Client) abs(path string) string {
 }
 
 func (c *Client) formattedStderr() string {
-	stderr := strings.TrimSpace(c.stderrBuf.String())
+	stderr := strings.TrimSpace(c.Stderr())
 	if stderr == "" {
 		return ""
 	}

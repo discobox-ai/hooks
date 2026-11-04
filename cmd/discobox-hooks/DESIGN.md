@@ -60,6 +60,9 @@ Initial command surface:
   and re-runs failed hooks with the failed run's changed files plus any changes
   since. `--force` re-runs every selected hook with its latest run's inputs. See
   the root `DESIGN.md` Execution Semantics.
+- `check`: wait for eligible work to settle and report unsuccessful hooks.
+  LSP output includes lifecycle errors as well as retained diagnostics, so a
+  failed startup reports its cause even when no diagnostics exist.
 - `pause` / `resume`: global execution control.
 - `pause <hook-id>` / `resume <hook-id>`: per-hook execution control.
 - `output [all|hook-id ...]`: print captured output for each selected hook's

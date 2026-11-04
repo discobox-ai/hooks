@@ -19,11 +19,11 @@ import (
 	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
-	"github.com/discobox-ai/x/gormdb"
 	hooks "github.com/discobox-ai/hooks"
 	hookapi "github.com/discobox-ai/hooks/api"
 	"github.com/discobox-ai/hooks/models"
 	"github.com/discobox-ai/hooks/watcher"
+	"github.com/discobox-ai/x/gormdb"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
@@ -312,6 +312,7 @@ func (s *Store) RefreshDefinitions(ctx context.Context, defs []hooks.Hook) error
 	return s.write.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		ids := make([]string, 0, len(defs))
 		changedLSPIDs := map[string]struct{}{}
+		lifecycleFailures := map[string]bool{}
 		for _, def := range defs {
 			if def.ID == "" {
 				return fmt.Errorf("hook definition id is required")
@@ -327,6 +328,17 @@ func (s *Store) RefreshDefinitions(ctx context.Context, defs []hooks.Hook) error
 				return err
 			}
 			if err == nil && existing.ConfigHash != row.ConfigHash {
+				if existing.Engine == string(hooks.HookEngineLSP) && def.IsLSP() {
+					var status models.HookStatus
+					if err := tx.Where("hook_id = ?", def.ID).First(&status).Error; err != nil {
+						return err
+					}
+					count, err := countDiagnosticsTx(tx, def.ID)
+					if err != nil {
+						return err
+					}
+					lifecycleFailures[def.ID] = status.Status == string(models.StatusFailure) && status.LastError != "" && count == 0
+				}
 				if existing.Engine == string(hooks.HookEngineLSP) {
 					if err := tx.Where("hook_id = ?", def.ID).Delete(&models.HookDiagnostic{}).Error; err != nil {
 						return err
@@ -381,6 +393,9 @@ func (s *Store) RefreshDefinitions(ctx context.Context, defs []hooks.Hook) error
 			return err
 		}
 		for hookID := range changedLSPIDs {
+			if lifecycleFailures[hookID] {
+				continue
+			}
 			if err := setLSPStatusFromDiagnosticsTx(tx, hookID, now); err != nil {
 				return err
 			}
@@ -478,7 +493,15 @@ func (s *Store) NextPendingExcluding(ctx context.Context, allowedHookIDs []strin
 	var row models.PendingHook
 	query := s.read.WithContext(ctx).
 		Joins("JOIN hook_definitions ON hook_definitions.id = pending_hooks.hook_id").
-		Where("pending_hooks.blocked = ?", false)
+		Where("pending_hooks.blocked = ?", false).
+		// LSP lifecycle failures have no script run row to block the queue.
+		// Keep queued scripts pending until the server is retried or paused.
+		Where(`NOT EXISTS (SELECT 1 FROM hook_statuses AS lsp_status
+            JOIN hook_definitions AS lsp_def ON lsp_def.id = lsp_status.hook_id
+            WHERE lsp_def.engine = ? AND lsp_status.status = ?
+            AND lsp_status.last_error <> '' AND lsp_status.paused = ?
+            AND NOT EXISTS (SELECT 1 FROM hook_diagnostics WHERE hook_id = lsp_status.hook_id))`,
+			string(hooks.HookEngineLSP), string(models.StatusFailure), false)
 	if len(excludeHookIDs) > 0 {
 		query = query.Where("pending_hooks.hook_id NOT IN ?", excludeHookIDs)
 	}

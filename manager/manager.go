@@ -225,12 +225,11 @@ func (m *Manager) SetGlobalExecution(ctx context.Context, req model.ExecutionPat
 // SetHookExecution pauses or resumes one hook.
 func (m *Manager) SetHookExecution(ctx context.Context, hookID string, req model.ExecutionPatchRequest) (model.ExecutionResponse, error) {
 	resp, err := m.service.SetHookExecution(ctx, hookID, req)
-	if !req.Paused {
-		m.SignalRun()
-	}
 	if err != nil {
 		return model.ExecutionResponse{}, err
 	}
+	// Pausing a failed LSP hook can release scripts blocked by its error.
+	m.SignalRun()
 	if req.Paused {
 		_ = m.RecordEvent(ctx, "hook.paused", hookID, "", "hook paused", map[string]any{"paused": true, "scope": "hook"})
 	} else {
