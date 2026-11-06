@@ -10,6 +10,10 @@ binary with a private helper entry argument and the intended child command after
 `--`. The top-level binary must call `HandleEntry` before normal CLI parsing so
 helper invocations run the proxy instead of the user-facing command.
 
+On Linux, re-exec uses `/proc/self/exe` directly so it launches the running image
+even after its original pathname is unlinked or replaced (for example, a cleaned
+Go temporary build). Other platforms use `os.Executable()`.
+
 The helper treats its stdin as both:
 
 - the byte stream to proxy to the child stdin

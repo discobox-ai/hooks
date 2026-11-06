@@ -35,7 +35,7 @@ func CommandContext(ctx context.Context, opts CommandOptions) (*exec.Cmd, error)
 	if strings.TrimSpace(opts.Command) == "" {
 		return nil, fmt.Errorf("command is required")
 	}
-	exe, err := os.Executable()
+	exe, err := helperExecutable()
 	if err != nil {
 		return nil, err
 	}
