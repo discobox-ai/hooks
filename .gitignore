@@ -1,0 +1,17 @@
+# Build output.
+/build/
+# watchnbuild failure reports.
+wnb-*-failed.txt
+# direnv and nix.
+/.direnv/
+/result*
+# Local environment; .env.example is the committed template. Narrower than
+# ".env*", which would also ignore the committed .envrc.
+.env
+.env.*
+!.env.example
+# Agent worktrees.
+/.*/worktrees/
+# Test binaries and profiles.
+*.test
+*.out

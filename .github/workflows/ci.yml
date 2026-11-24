@@ -1,0 +1,69 @@
+# Every job body is one Taskfile target; what it does lives in Taskfile.yml
+# and runs the same way in a terminal.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    runs-on: depot-ubuntu-24.04-4
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/task
+        with:
+          target: verify
+
+  check:
+    runs-on: depot-ubuntu-24.04-4
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/task
+        with:
+          target: check
+
+  test:
+    runs-on: depot-ubuntu-24.04-4
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/task
+        with:
+          target: test
+
+  # Nix does not run on Windows, so this job gets Go from setup-go (repostd
+  # ci.no-setup), with setup-go's own cache off: it is actions/cache (repostd
+  # ci.no-actions-cache). It builds cold: depot gocache on Windows renames
+  # each object over its final path even when it exists, which Windows
+  # refuses while another process (vet) has it open, failing about one run
+  # in eight.
+  windows:
+    runs-on: depot-windows-2025-4
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - run: go tool task test
