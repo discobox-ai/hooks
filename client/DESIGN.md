@@ -43,10 +43,12 @@ decision and phase activation.
 
 ## Version Handshake
 
-`PingInfo` returns daemon metadata including the session ID and numeric daemon
-version. The CLI uses this metadata before normal commands: if the client build
-version is newer than the daemon version, it requests daemon shutdown and starts
-the current executable as the replacement daemon.
+`PingInfo` returns daemon metadata including the session ID, numeric daemon
+version, and build ID (a content digest of the daemon's executable). The CLI
+uses this metadata before normal commands: if the client build version is newer
+than the daemon version and the build IDs differ, it requests daemon shutdown
+and starts the current executable as the replacement daemon (see
+`cmd/discobox-hooks/DESIGN.md`, Daemon Replacement).
 
 ## DTO Ownership
 

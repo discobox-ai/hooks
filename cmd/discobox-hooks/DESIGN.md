@@ -84,13 +84,24 @@ Initial command surface:
 ## Daemon Replacement
 
 Before sending a normal command, the CLI calls daemon `PingInfo`. If the daemon's
-reported numeric version is older than the current client build version, the CLI
-asks the daemon to shut down, waits for the socket to become unavailable, and
-then starts the current executable as the new daemon under the startup lock.
+reported numeric version is older than the current client build version, and
+its build ID differs from the client's, the CLI asks the daemon to shut down,
+waits for the socket to become unavailable, and then starts the current
+executable as the new daemon under the startup lock.
 
 Development builds derive the client/daemon version from the executable mtime,
 which is the Unix epoch of the last local build. Release builds may inject an
 explicit numeric version with Go linker flags.
+
+The build ID is a SHA-256 of the running executable's content (read through
+`/proc/self/exe` where it exists, so an unlinked or rebuilt-over image still
+hashes as what is running). The daemon computes it once at startup; the client
+computes it only when the versions call for a replacement. It exists because an
+mtime orders builds but does not identify them: two copies of one build, such
+as two `go tool discobox-hooks` clients started together, can carry mtimes a
+second apart, and without the ID the later client replaces the daemon the
+earlier one just started. A daemon that reports no build ID (an older build)
+is compared by version alone.
 
 ## Daemonization
 

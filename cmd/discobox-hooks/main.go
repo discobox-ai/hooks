@@ -14,6 +14,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"text/tabwriter"
 	"time"
 
@@ -157,6 +158,7 @@ func (a *app) newDaemonCommand() *cobra.Command {
 				RuntimePath:         paths.Runtime,
 				TempDir:             filepath.Join(paths.RuntimeDir, "tmp"),
 				Version:             currentBuildVersion(),
+				BuildID:             currentBuildID(),
 				Debounce:            debounce,
 				SnapshotDebounce:    snapshotDebounce,
 				SnapshotMinInterval: snapshotMinInterval,
@@ -2064,7 +2066,7 @@ func ensureDaemon(ctx context.Context, c *client.Client, paths sessionPaths) err
 	pingCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	info, err := c.PingInfo(pingCtx)
 	cancel()
-	if err == nil && !clientNewerThanDaemon(currentBuildVersion(), info.Version) {
+	if err == nil && !daemonNeedsReplacing(info) {
 		return nil
 	}
 	if err != nil && !errors.Is(err, client.ErrNotRunning) {
@@ -2081,10 +2083,10 @@ func ensureDaemon(ctx context.Context, c *client.Client, paths sessionPaths) err
 	pingCtx, cancel = context.WithTimeout(ctx, 500*time.Millisecond)
 	info, err = c.PingInfo(pingCtx)
 	cancel()
-	if err == nil && !clientNewerThanDaemon(currentBuildVersion(), info.Version) {
+	if err == nil && !daemonNeedsReplacing(info) {
 		return nil
 	}
-	if err == nil && clientNewerThanDaemon(currentBuildVersion(), info.Version) {
+	if err == nil {
 		if err := replaceOlderDaemon(ctx, c, paths); err != nil {
 			return err
 		}
@@ -2102,7 +2104,7 @@ func ensureDaemon(ctx context.Context, c *client.Client, paths sessionPaths) err
 		pingCtx, cancel = context.WithTimeout(ctx, 500*time.Millisecond)
 		info, err = c.PingInfo(pingCtx)
 		cancel()
-		if err == nil && !clientNewerThanDaemon(currentBuildVersion(), info.Version) {
+		if err == nil && !daemonNeedsReplacing(info) {
 			return nil
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -2110,8 +2112,28 @@ func ensureDaemon(ctx context.Context, c *client.Client, paths sessionPaths) err
 	return fmt.Errorf("daemon did not become ready at %s: %w", paths.Socket, err)
 }
 
-func clientNewerThanDaemon(clientVersion, daemonVersion int64) bool {
-	return clientVersion > daemonVersion
+// daemonNeedsReplacing reports whether this client should replace the running
+// daemon with its own build.
+func daemonNeedsReplacing(info *client.PingResponse) bool {
+	return replaceDaemonBuild(currentBuildVersion(), currentBuildID, info.Version, info.BuildID)
+}
+
+// replaceDaemonBuild decides daemon replacement. Only a newer client build
+// replaces a daemon, and not when both run the same executable content: a
+// development build's version is its executable's mtime, so two copies of one
+// build (two `go tool` clients started together) can be a second apart, and
+// the later one must not restart the daemon the earlier one just started. A
+// daemon that reports no build ID (an older build, or one that could not read
+// its executable) is compared by version alone. clientBuildID is only called
+// when the versions call for a replacement, since it hashes the executable.
+func replaceDaemonBuild(clientVersion int64, clientBuildID func() string, daemonVersion int64, daemonBuildID string) bool {
+	if clientVersion <= daemonVersion {
+		return false
+	}
+	if daemonBuildID == "" {
+		return true
+	}
+	return clientBuildID() != daemonBuildID
 }
 
 func replaceOlderDaemon(ctx context.Context, c *client.Client, paths sessionPaths) error {
@@ -2226,6 +2248,30 @@ func currentBuildVersion() int64 {
 	}
 	return time.Now().Unix()
 }
+
+// currentBuildID is a content digest of the running executable, or "" when it
+// cannot be read. It names a build by what it runs rather than when it was
+// written, so copies of one build share an ID.
+var currentBuildID = sync.OnceValue(func() string {
+	// /proc/self/exe opens the running image even after its file was unlinked
+	// or replaced by a rebuild; os.Executable would name the new file instead.
+	f, err := os.Open("/proc/self/exe")
+	if err != nil {
+		exe, exeErr := os.Executable()
+		if exeErr != nil {
+			return ""
+		}
+		if f, err = os.Open(exe); err != nil {
+			return ""
+		}
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(h.Sum(nil))
+})
 
 func parseVersion(v string) (int64, bool) {
 	v = strings.TrimSpace(v)
