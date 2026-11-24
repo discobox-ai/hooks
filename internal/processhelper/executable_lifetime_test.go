@@ -43,7 +43,7 @@ func TestHelperStartsAfterExecutableUnlinked(t *testing.T) {
 	if err := os.WriteFile(copied, data, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(copied, "-test.run=^TestHelperStartsAfterExecutableUnlinked$")
+	cmd := exec.CommandContext(t.Context(), copied, "-test.run=^TestHelperStartsAfterExecutableUnlinked$")
 	cmd.Env = append(os.Environ(), "HOOKS_TEST_UNLINK_SELF=1")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("helper launch failed: %v\n%s", err, out)

@@ -141,7 +141,7 @@ func ParseGlobalIgnoreFile(path string) ([]string, error) {
 		return nil, err
 	}
 	var patterns []string
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue

@@ -169,8 +169,7 @@ func Run(ctx context.Context, req Request) Result {
 		return res
 	}
 
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
+	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 		res.ExitCode = exitErr.ExitCode()
 		return res
 	}

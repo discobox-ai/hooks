@@ -12,7 +12,7 @@ import (
 )
 
 // TestGitCommandCancelTerminates pins the second half of the index.lock fix:
-// a cancelled daemon git must get a signal it can install a handler for, so
+// a canceled daemon git must get a signal it can install a handler for, so
 // git's own lockfile cleanup runs. The os/exec default is SIGKILL, which git
 // cannot clean up after.
 func TestGitCommandCancelTerminates(t *testing.T) {
@@ -21,7 +21,7 @@ func TestGitCommandCancelTerminates(t *testing.T) {
 	defer cancel()
 
 	// `cat-file --batch` blocks on stdin, so the command is still running when
-	// the context is cancelled.
+	// the context is canceled.
 	stdin, stdinWriter, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -39,13 +39,13 @@ func TestGitCommandCancelTerminates(t *testing.T) {
 	err = cmd.Wait()
 	var exitErr *exec.ExitError
 	if !errors.As(err, &exitErr) {
-		t.Fatalf("expected the cancelled git to exit on a signal, got %v", err)
+		t.Fatalf("expected the canceled git to exit on a signal, got %v", err)
 	}
 	status, ok := exitErr.Sys().(syscall.WaitStatus)
 	if !ok || !status.Signaled() {
-		t.Fatalf("expected a signalled exit, got %v", exitErr)
+		t.Fatalf("expected a signaled exit, got %v", exitErr)
 	}
 	if got := status.Signal(); got != syscall.SIGTERM {
-		t.Fatalf("cancelled git got %v, want SIGTERM so it can clean up its lock files", got)
+		t.Fatalf("canceled git got %v, want SIGTERM so it can clean up its lock files", got)
 	}
 }

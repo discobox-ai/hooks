@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -446,6 +447,7 @@ func (r *runtimeState) watchLoop(w *watcher.Watcher) {
 			} else if batch.Snapshot != nil {
 				r.persistWatchedCheckpoint(batch.Snapshot, nil)
 			}
+		//nolint:errcheck // Watcher errors are dropped: the watcher rescans every second, so a failed scan or watch is retried; surfacing them is #9.
 		case <-w.Errors():
 		}
 	}
@@ -504,10 +506,7 @@ func (r *runtimeState) snapshotLoop() {
 		timerC = timer.C
 	}
 	nextDelay := func() time.Duration {
-		delay := r.cfg.SnapshotDebounce
-		if delay < 0 {
-			delay = 0
-		}
+		delay := max(r.cfg.SnapshotDebounce, 0)
 		if r.cfg.SnapshotMinInterval <= 0 {
 			return delay
 		}
@@ -857,9 +856,7 @@ func cloneWatcherSnapshot(in map[string]watcher.Entry) map[string]watcher.Entry 
 		return nil
 	}
 	out := make(map[string]watcher.Entry, len(in))
-	for path, entry := range in {
-		out[path] = entry
-	}
+	maps.Copy(out, in)
 	return out
 }
 

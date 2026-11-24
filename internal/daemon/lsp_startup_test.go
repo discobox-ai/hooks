@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,7 +27,7 @@ func TestMain(m *testing.M) {
 }
 
 // A minimal real stdio server, launched by the repaired hook executable.
-func TestLSPStartupServer(t *testing.T) {
+func TestLSPStartupServer(_ *testing.T) {
 	if os.Getenv("HOOKS_TEST_LSP_SERVER") != "1" {
 		return
 	}
@@ -66,8 +65,7 @@ func TestLSPStartupFailureSettlesAndExplicitRetryRecovers(t *testing.T) {
 	requireExecutableHooks(t)
 	for _, explicit := range []bool{false, true} {
 		t.Run(fmt.Sprintf("explicit=%t", explicit), func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			ctx := t.Context()
 			repo := t.TempDir()
 			st, err := store.Open(ctx, store.Options{Path: filepath.Join(t.TempDir(), "hooks.db")})
 			if err != nil {

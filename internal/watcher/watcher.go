@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -393,10 +394,5 @@ func shouldSkipNodeModules(rel string) bool {
 	if rel == "." || rel == "" {
 		return false
 	}
-	for _, part := range strings.Split(rel, "/") {
-		if part == "node_modules" {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(strings.Split(rel, "/"), "node_modules")
 }

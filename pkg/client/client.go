@@ -415,8 +415,7 @@ func (c *Client) FollowEvents(ctx context.Context, opts EventOptions, fn func(Ev
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		var cbErr callbackError
-		if errors.As(err, &cbErr) {
+		if cbErr, ok := errors.AsType[callbackError](err); ok {
 			return cbErr.err
 		}
 		if time.Since(start) >= healthyStreamDuration {
@@ -520,10 +519,8 @@ func readSSEEvents(r io.Reader, fn func(Event) error) error {
 			if err := dispatch(); err != nil {
 				return err
 			}
-		} else if strings.HasPrefix(line, "data:") {
-			value := strings.TrimPrefix(line, "data:")
-			value = strings.TrimPrefix(value, " ")
-			data = append(data, value)
+		} else if value, ok := strings.CutPrefix(line, "data:"); ok {
+			data = append(data, strings.TrimPrefix(value, " "))
 		}
 		if errors.Is(err, io.EOF) {
 			return dispatch()
@@ -642,8 +639,7 @@ func classifyError(socketPath string, err error) error {
 			return fmt.Errorf("%w: socket %s does not exist", ErrNotRunning, socketPath)
 		}
 	}
-	var op *net.OpError
-	if errors.As(err, &op) {
+	if _, ok := errors.AsType[*net.OpError](err); ok {
 		return fmt.Errorf("%w: %w", ErrNotRunning, err)
 	}
 	return err

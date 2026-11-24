@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -322,12 +323,7 @@ func isExpectedLimit(r *http.Request, expected ...string) bool {
 	if !ok || len(values) != 1 {
 		return false
 	}
-	for _, value := range expected {
-		if values[0] == value {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(expected, values[0])
 }
 
 func TestReadSSEEventsHandlesLargeDataLine(t *testing.T) {

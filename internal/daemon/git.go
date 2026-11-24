@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// gitTerminateGrace bounds how long a cancelled git may take to run its own
+// gitTerminateGrace bounds how long a canceled git may take to run its own
 // lockfile cleanup before os/exec resorts to the hard kill.
 const gitTerminateGrace = 2 * time.Second
 
@@ -25,6 +25,7 @@ const gitTerminateGrace = 2 * time.Second
 //     handlers get to remove whatever it did lock. os/exec's default for a
 //     context-bound command is Process.Kill, which git cannot clean up after.
 func gitCommand(ctx context.Context, dir string, args ...string) *exec.Cmd {
+	//nolint:gosec // G204: git is a fixed program and args go to it as argv, never through a shell.
 	cmd := exec.CommandContext(ctx, "git", append([]string{"--no-optional-locks"}, args...)...)
 	cmd.Dir = dir
 	configureGitCancel(cmd)

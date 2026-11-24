@@ -226,8 +226,7 @@ func matchPattern(pattern, path string) (bool, error) {
 	}
 	// Discobot/picomatch-compatible convenience: a trailing /** pattern also
 	// matches the directory itself.
-	if strings.HasSuffix(pattern, "/**") {
-		dir := strings.TrimSuffix(pattern, "/**")
+	if dir, ok := strings.CutSuffix(pattern, "/**"); ok {
 		return doublestar.Match(dir, path)
 	}
 	return false, nil
@@ -262,7 +261,7 @@ func GitIgnored(repoRoot string, paths []string, timeout time.Duration) (map[str
 	}
 
 	ignored := make(map[string]bool)
-	for _, line := range strings.Split(stdout.String(), "\n") {
+	for line := range strings.SplitSeq(stdout.String(), "\n") {
 		line = filepath.ToSlash(strings.TrimSpace(line))
 		if line != "" {
 			ignored[line] = true
