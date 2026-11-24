@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +37,26 @@ type Watcher struct {
 	mu       sync.Mutex
 	snapshot map[string]Entry
 	watched  map[string]struct{}
+
+	// reported is owned by New and then the run goroutine, not guarded by
+	// mu. It holds the skipped paths whose error has been delivered on
+	// Errors and that were still failing at the last full pass (scan plus
+	// watch walk from the root). A path is reported when it first fails, not
+	// again on every resync while it keeps failing, and again if it recovers
+	// and fails later. An error dropped because Errors was full is not
+	// recorded, so the next pass sends it again.
+	reported map[string]struct{}
+}
+
+// skippedPaths collects the non-fatal per-path failures of one walk: a
+// directory that could not be read or watched, or an entry that could not be
+// stat'ed. Each error names its path.
+type skippedPaths map[string]error
+
+func (s skippedPaths) add(path string, err error) {
+	if _, ok := s[path]; !ok {
+		s[path] = err
+	}
 }
 
 // New creates a recursive watcher rooted at root. root must name an existing
@@ -62,21 +83,23 @@ func New(root string, opts Options) (*Watcher, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	w := &Watcher{
-		root:    absRoot,
-		opts:    opts,
-		fw:      fw,
-		batches: make(chan Batch, opts.BatchBuffer),
-		errs:    make(chan error, opts.ErrorBuffer),
-		ctx:     ctx,
-		cancel:  cancel,
-		done:    make(chan struct{}),
-		watched: make(map[string]struct{}),
+		root:     absRoot,
+		opts:     opts,
+		fw:       fw,
+		batches:  make(chan Batch, opts.BatchBuffer),
+		errs:     make(chan error, opts.ErrorBuffer),
+		ctx:      ctx,
+		cancel:   cancel,
+		done:     make(chan struct{}),
+		watched:  make(map[string]struct{}),
+		reported: make(map[string]struct{}),
 	}
 
+	skipped := skippedPaths{}
 	if opts.InitialSnapshot != nil {
 		w.snapshot = cloneSnapshot(opts.InitialSnapshot)
 	} else {
-		w.snapshot, err = w.scan(nil)
+		w.snapshot, err = w.scan(nil, skipped)
 		if err != nil {
 			_ = fw.Close()
 			cancel()
@@ -84,11 +107,13 @@ func New(root string, opts Options) (*Watcher, error) {
 		}
 	}
 
-	if err := w.addRecursive(absRoot); err != nil {
+	if err := w.addRecursive(absRoot, skipped); err != nil {
 		_ = fw.Close()
 		cancel()
 		return nil, err
 	}
+	// Errors is buffered, so these wait there until the caller reads it.
+	w.reportSkipped(skipped, true)
 
 	go w.run(opts.EmitInitial && opts.InitialSnapshot == nil)
 	return w, nil
@@ -201,14 +226,16 @@ func (w *Watcher) rescan(resync bool) {
 	w.mu.Lock()
 	prev := w.snapshot
 	w.mu.Unlock()
-	newSnap, err := w.scan(prev)
+	skipped := skippedPaths{}
+	newSnap, err := w.scan(prev, skipped)
 	if err != nil {
 		w.sendError(err)
 		return
 	}
-	if err := w.addRecursive(w.root); err != nil {
+	if err := w.addRecursive(w.root, skipped); err != nil {
 		w.sendError(err)
 	}
+	w.reportSkipped(skipped, true)
 
 	w.mu.Lock()
 	oldSnap := w.snapshot
@@ -228,29 +255,71 @@ func (w *Watcher) sendBatch(batch Batch) {
 	}
 }
 
-func (w *Watcher) sendError(err error) {
+// sendError delivers err on Errors without blocking, and reports whether it
+// was delivered; it is dropped when the buffer is full.
+func (w *Watcher) sendError(err error) bool {
 	if err == nil {
-		return
+		return false
 	}
 	select {
 	case <-w.ctx.Done():
+		return false
 	case w.errs <- err:
+		return true
 	default:
+		return false
 	}
 }
 
-func (w *Watcher) scan(prevSnap map[string]Entry) (map[string]Entry, error) {
+// reportSkipped sends an error for each skipped path not already reported,
+// and records the ones delivered. After a full pass (full is true) a reported
+// path that no longer fails is forgotten, so it is reported again if it fails
+// later; a partial walk (a newly created directory) only adds to the set.
+func (w *Watcher) reportSkipped(skipped skippedPaths, full bool) {
+	paths := make([]string, 0, len(skipped))
+	for path := range skipped {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
+	next := make(map[string]struct{}, len(skipped))
+	if !full {
+		for path := range w.reported {
+			next[path] = struct{}{}
+		}
+	}
+	for _, path := range paths {
+		if _, ok := w.reported[path]; ok || w.sendError(skipped[path]) {
+			next[path] = struct{}{}
+		}
+	}
+	w.reported = next
+}
+
+// scan walks the tree into a fresh snapshot. Only a failure at the root fails
+// the scan. A path below it that cannot be read is recorded in skipped and
+// pruned, and its previous entries are carried forward from prevSnap: what
+// the watcher cannot see is reported as unchanged rather than deleted.
+func (w *Watcher) scan(prevSnap map[string]Entry, skipped skippedPaths) (map[string]Entry, error) {
 	snap := make(map[string]Entry)
 	err := filepath.WalkDir(w.root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			if errors.Is(walkErr, fs.ErrNotExist) {
 				return nil
 			}
-			return walkErr
+			if path == w.root {
+				return walkErr
+			}
+			// WalkDir calls back a second time for a directory it could not
+			// read; the directory's own entry is already in snap.
+			skipped.add(path, walkErr)
+			carryForward(snap, prevSnap, w.relSlash(path))
+			return fs.SkipDir
 		}
 		if path == w.root {
 			return nil
 		}
+		rel := w.relSlash(path)
 
 		info, err := d.Info()
 		if err != nil {
@@ -260,13 +329,16 @@ func (w *Watcher) scan(prevSnap map[string]Entry) (map[string]Entry, error) {
 				}
 				return nil
 			}
-			return err
+			skipped.add(path, &fs.PathError{Op: "stat", Path: path, Err: err})
+			if prev, ok := prevSnap[rel]; ok {
+				snap[rel] = prev
+			}
+			if d.IsDir() {
+				carryForward(snap, prevSnap, rel)
+				return fs.SkipDir
+			}
+			return nil
 		}
-		rel, err := filepath.Rel(w.root, path)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
 
 		entry := Entry{Path: rel, IsDir: info.IsDir(), Size: info.Size(), Mode: info.Mode(), ModTime: info.ModTime()}
 		if shouldSkipGit(rel, entry) || shouldSkipNodeModules(rel) || (w.opts.Ignore != nil && w.opts.Ignore(rel, entry)) {
@@ -320,6 +392,26 @@ func BackfillHashes(root string, snap map[string]Entry) int {
 	return filled
 }
 
+// relSlash returns path relative to the root, slash-separated. path is always
+// the root or below it, as WalkDir from the root produces.
+func (w *Watcher) relSlash(path string) string {
+	rel, err := filepath.Rel(w.root, path)
+	if err != nil {
+		return filepath.ToSlash(path)
+	}
+	return filepath.ToSlash(rel)
+}
+
+// carryForward copies prev's entries below dir into snap.
+func carryForward(snap, prev map[string]Entry, dir string) {
+	prefix := dir + "/"
+	for rel, entry := range prev {
+		if strings.HasPrefix(rel, prefix) {
+			snap[rel] = entry
+		}
+	}
+}
+
 // hashFile returns a hex content digest for the regular file at path.
 func hashFile(path string) (string, error) {
 	f, err := os.Open(path)
@@ -334,13 +426,22 @@ func hashFile(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func (w *Watcher) addRecursive(root string) error {
+// addRecursive watches root and every directory below it. Only a failure at
+// the watcher's own root is returned; a directory below it that cannot be
+// read or watched is recorded in skipped and pruned, and the rest of the tree
+// is still watched. The periodic resync still sees changes under a directory
+// that is readable but not watched.
+func (w *Watcher) addRecursive(root string, skipped skippedPaths) error {
 	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
 				return nil
 			}
-			return err
+			if path == w.root {
+				return err
+			}
+			skipped.add(path, err)
+			return fs.SkipDir
 		}
 		if !d.IsDir() {
 			return nil
@@ -351,7 +452,14 @@ func (w *Watcher) addRecursive(root string) error {
 			}
 			return fs.SkipDir
 		}
-		return w.addWatch(path)
+		if err := w.addWatch(path); err != nil {
+			if path == w.root {
+				return err
+			}
+			skipped.add(path, err)
+			return fs.SkipDir
+		}
+		return nil
 	})
 }
 
@@ -360,9 +468,11 @@ func (w *Watcher) addIfDirectory(path string) {
 	if err != nil || !info.IsDir() {
 		return
 	}
-	if err := w.addRecursive(path); err != nil {
+	skipped := skippedPaths{}
+	if err := w.addRecursive(path, skipped); err != nil {
 		w.sendError(err)
 	}
+	w.reportSkipped(skipped, false)
 }
 
 func (w *Watcher) addWatch(path string) error {
@@ -381,7 +491,8 @@ func (w *Watcher) addWatch(path string) error {
 		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
-		return err
+		// fsnotify's error does not name the path.
+		return &fs.PathError{Op: "watch", Path: abs, Err: err}
 	}
 
 	w.mu.Lock()

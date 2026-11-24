@@ -72,6 +72,29 @@ unchanged anyway) so the daemon can save them once. A scan reuses
 the previous hash when a file's size and mtime are unchanged, so an edit that
 keeps both is not detected, at restart as in steady state.
 
+## Unreadable Paths
+
+Only a failure at the watch root is fatal: `New` returns it, and a resync that
+cannot read the root reports it and keeps the previous snapshot. Below the
+root, a directory that cannot be read or watched (a mode-0 directory, a
+root-owned mount), or an entry that cannot be stat'ed, is pruned from that walk
+and the rest of the tree is still scanned and watched, so changes elsewhere
+still arrive as batches.
+
+- The pruned subtree's entries are carried forward from the previous snapshot.
+  What the watcher cannot see is treated as unchanged, not deleted, so a
+  directory losing its read permission does not emit a delete for every file
+  in it. Once it is readable again the next resync diffs it normally.
+- Each skipped path is sent on `Errors` as an error naming that path (fsnotify's
+  own watch error does not, so the watcher wraps it). The daemon resyncs every
+  second, so a path is reported when it first fails and not again while it
+  keeps failing; once a full pass no longer fails on it, it is forgotten and
+  reported again if it fails later. An error dropped because `Errors` was full
+  does not count as reported, so a later pass sends it again.
+- Reporting stops at the `Errors` channel. The daemon reads and discards it
+  today, so a skipped path is not yet visible to the user; surfacing watcher
+  errors is the daemon's to do.
+
 ## Non-Responsibilities
 
 - Do not know about hook definitions.
