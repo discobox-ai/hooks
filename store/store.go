@@ -1412,7 +1412,7 @@ func (s *Store) LoadWatchedSnapshot(ctx context.Context) (map[string]watcher.Ent
 	out := make(map[string]watcher.Entry, len(rows))
 	for _, row := range rows {
 		path := filepath.ToSlash(row.Path)
-		out[path] = watcher.Entry{Path: path, IsDir: row.IsDir, Size: row.Size, Mode: fs.FileMode(row.Mode), ModTime: row.ModTime}
+		out[path] = watcher.Entry{Path: path, IsDir: row.IsDir, Size: row.Size, Mode: fs.FileMode(row.Mode), ModTime: row.ModTime, Hash: row.Hash}
 	}
 	return out, nil
 }
@@ -1480,7 +1480,7 @@ func (s *Store) ReplaceWatchedSnapshot(ctx context.Context, snapshot map[string]
 }
 
 func watchedFileRow(path string, entry watcher.Entry, now time.Time) models.WatchedFile {
-	return models.WatchedFile{Path: path, IsDir: entry.IsDir, Size: entry.Size, Mode: uint32(entry.Mode), ModTime: entry.ModTime, UpdatedAt: now}
+	return models.WatchedFile{Path: path, IsDir: entry.IsDir, Size: entry.Size, Mode: uint32(entry.Mode), ModTime: entry.ModTime, Hash: entry.Hash, UpdatedAt: now}
 }
 
 func ChangedFilesFromWatcher(changes []watcher.Change) []models.ChangedFile {

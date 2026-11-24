@@ -158,6 +158,7 @@ erDiagram
         int size
         int mode
         datetime mod_time
+        string hash
         datetime updated_at
     }
 
@@ -231,7 +232,12 @@ state, that is not tied to a specific hook run or queue item.
 
 `watched_files` stores the daemon's latest full watcher snapshot. It is not tied
 to hook definitions; it is a restart checkpoint used to diff the current
-repository state after idle daemon shutdown.
+repository state after idle daemon shutdown. `hash` holds the watcher's content
+digest for regular files, so a restart compares content the way the running
+watcher does. Rows written before the column existed hold an empty hash; at
+startup the daemon fills in the hash of each such file whose size and mtime are
+unchanged and saves the checkpoint once, and a file that did change is compared
+by size and mtime and reported as modified.
 
 `hook_events` is the global audit trail. Event details should intentionally
 duplicate the important facts from source tables when needed so an audit reader

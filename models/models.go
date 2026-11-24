@@ -242,12 +242,16 @@ func (HookInvocationChange) TableName() string              { return "hook_invoc
 func (c *HookInvocationChange) BeforeCreate(*gorm.DB) error { return ensureGeneratedID(&c.ID, "hkivc") }
 
 // WatchedFile stores the latest watcher snapshot entry for restart diffing.
+// Hash is the regular file's content digest (watcher.Entry.Hash); rows written
+// before the column existed hold "", and the watcher then compares that file by
+// size and mtime instead.
 type WatchedFile struct {
 	Path      string    `gorm:"primaryKey" json:"path"`
 	IsDir     bool      `json:"is_dir"`
 	Size      int64     `json:"size"`
 	Mode      uint32    `json:"mode"`
 	ModTime   time.Time `json:"mod_time"`
+	Hash      string    `json:"hash"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 

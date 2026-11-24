@@ -292,6 +292,34 @@ func (w *Watcher) scan(prevSnap map[string]Entry) (map[string]Entry, error) {
 	return snap, err
 }
 
+// BackfillHashes fills in the content hash of each regular-file entry in snap
+// that has none, such as a checkpoint row saved before hashes were persisted,
+// and reports how many it filled. It hashes only files whose size and mtime on
+// disk still match the entry: those are the files the size-and-mtime fallback
+// already treats as unchanged, so their current bytes are the entry's. A file
+// that moved keeps its empty hash and is still reported as modified.
+func BackfillHashes(root string, snap map[string]Entry) int {
+	filled := 0
+	for path, entry := range snap {
+		if entry.Hash != "" || !entry.Mode.IsRegular() {
+			continue
+		}
+		abs := filepath.Join(root, filepath.FromSlash(path))
+		info, err := os.Lstat(abs)
+		if err != nil || !info.Mode().IsRegular() || info.Size() != entry.Size || !info.ModTime().Equal(entry.ModTime) {
+			continue
+		}
+		h, err := hashFile(abs)
+		if err != nil {
+			continue
+		}
+		entry.Hash = h
+		snap[path] = entry
+		filled++
+	}
+	return filled
+}
+
 // hashFile returns a hex content digest for the regular file at path.
 func hashFile(path string) (string, error) {
 	f, err := os.Open(path)
