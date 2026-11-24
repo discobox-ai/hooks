@@ -1103,24 +1103,89 @@ func TestResolveSessionID(t *testing.T) {
 	}
 }
 
-func TestClientNewerThanDaemon(t *testing.T) {
+func TestReplaceDaemonBuild(t *testing.T) {
 	tests := []struct {
 		name          string
 		clientVersion int64
+		clientBuildID string
 		daemonVersion int64
+		daemonBuildID string
 		want          bool
 	}{
-		{name: "client newer", clientVersion: 2, daemonVersion: 1, want: true},
-		{name: "same version", clientVersion: 2, daemonVersion: 2},
-		{name: "daemon newer", clientVersion: 1, daemonVersion: 2},
+		{name: "client newer, other build", clientVersion: 2, clientBuildID: "b", daemonVersion: 1, daemonBuildID: "a", want: true},
+		{name: "client newer, same build", clientVersion: 2, clientBuildID: "a", daemonVersion: 1, daemonBuildID: "a"},
+		{name: "client newer, daemon reports no build", clientVersion: 2, clientBuildID: "a", daemonVersion: 1, want: true},
+		{name: "client newer, client build unreadable", clientVersion: 2, daemonVersion: 1, daemonBuildID: "a", want: true},
+		{name: "same version, other build", clientVersion: 2, clientBuildID: "b", daemonVersion: 2, daemonBuildID: "a"},
+		{name: "daemon newer, other build", clientVersion: 1, clientBuildID: "b", daemonVersion: 2, daemonBuildID: "a"},
 		{name: "zero daemon version", clientVersion: 1, daemonVersion: 0, want: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := clientNewerThanDaemon(tt.clientVersion, tt.daemonVersion); got != tt.want {
-				t.Fatalf("clientNewerThanDaemon(%d, %d) = %t, want %t", tt.clientVersion, tt.daemonVersion, got, tt.want)
+			buildID := func() string { return tt.clientBuildID }
+			if got := replaceDaemonBuild(tt.clientVersion, buildID, tt.daemonVersion, tt.daemonBuildID); got != tt.want {
+				t.Fatalf("replaceDaemonBuild(%d, %q, %d, %q) = %t, want %t", tt.clientVersion, tt.clientBuildID, tt.daemonVersion, tt.daemonBuildID, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestReplaceDaemonBuildHashesOnlyWhenClientIsNewer(t *testing.T) {
+	called := false
+	buildID := func() string { called = true; return "a" }
+	if replaceDaemonBuild(1, buildID, 1, "a") || called {
+		t.Fatalf("same version: replaced or hashed the executable (hashed=%t)", called)
+	}
+}
+
+// A client whose build is a copy of the running daemon's (same content, a
+// later mtime and so a higher version) keeps that daemon instead of replacing it.
+func TestEnsureDaemonKeepsDaemonOfSameBuild(t *testing.T) {
+	if currentBuildID() == "" {
+		t.Skip("test executable is unreadable")
+	}
+	temp := shorttmp.Dir(t)
+	t.Setenv("XDG_STATE_HOME", filepath.Join(temp, "state"))
+	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(temp, "run"))
+	repoRoot := filepath.Join(temp, "repo")
+	if err := os.MkdirAll(repoRoot, 0755); err != nil {
+		t.Fatal(err)
+	}
+	paths := computeSessionPaths(repoRoot, "test-session")
+	if err := os.MkdirAll(paths.RuntimeDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "unix", paths.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	shutdowns := make(chan struct{}, 1)
+	srv := &http.Server{ReadHeaderTimeout: time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.EscapedPath() {
+		case "/ping":
+			w.Header().Set("Content-Type", "application/json")
+			writeTestJSON(t, w, client.PingResponse{OK: true, SessionID: "test-session", Version: currentBuildVersion() - 1, BuildID: currentBuildID()})
+		case "/shutdown":
+			shutdowns <- struct{}{}
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			http.NotFound(w, r)
+		}
+	})}
+	go func() { _ = srv.Serve(ln) }()
+	defer srv.Shutdown(context.Background())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := ensureDaemon(ctx, client.New(paths.Socket), paths); err != nil {
+		t.Fatalf("ensureDaemon: %v", err)
+	}
+	select {
+	case <-shutdowns:
+		t.Fatal("ensureDaemon asked a daemon of the same build to shut down")
+	default:
 	}
 }
 

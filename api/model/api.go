@@ -12,6 +12,9 @@ type PingResponse struct {
 	OK        bool   `json:"ok"`
 	SessionID string `json:"session_id"`
 	Version   int64  `json:"version"`
+	// BuildID is a content digest of the daemon's executable. A client whose
+	// build has the same digest runs the same code, whatever its Version says.
+	BuildID string `json:"build_id,omitempty"`
 }
 
 // StatusResponse is returned by GET /status.

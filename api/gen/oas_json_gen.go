@@ -2754,12 +2754,19 @@ func (s *PingResponse) encodeFields(e *jx.Encoder) {
 		e.FieldStart("version")
 		e.Int64(s.Version)
 	}
+	{
+		if s.BuildID.Set {
+			e.FieldStart("build_id")
+			s.BuildID.Encode(e)
+		}
+	}
 }
 
-var jsonFieldsNameOfPingResponse = [3]string{
+var jsonFieldsNameOfPingResponse = [4]string{
 	0: "ok",
 	1: "session_id",
 	2: "version",
+	3: "build_id",
 }
 
 // Decode decodes PingResponse from json.
@@ -2806,6 +2813,16 @@ func (s *PingResponse) Decode(d *jx.Decoder) error {
 				return nil
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"version\"")
+			}
+		case "build_id":
+			if err := func() error {
+				s.BuildID.Reset()
+				if err := s.BuildID.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"build_id\"")
 			}
 		default:
 			return d.Skip()

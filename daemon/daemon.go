@@ -53,6 +53,7 @@ type Config struct {
 	RuntimePath         string
 	TempDir             string
 	Version             int64
+	BuildID             string
 	Debounce            time.Duration
 	SnapshotDebounce    time.Duration
 	SnapshotMinInterval time.Duration
@@ -189,7 +190,7 @@ func newRuntime(ctx context.Context, cfg Config) (*runtimeState, error) {
 		_ = st.Close()
 		return nil, err
 	}
-	mgr, err := manager.New(manager.Config{Store: st, Hooks: disc.Hooks, SessionID: cfg.SessionID, RepoRoot: cfg.RepoRoot, Version: cfg.Version, Cancel: cancel, SignalRun: r.signalDrain, ActivateLSP: r.requestLSPRun})
+	mgr, err := manager.New(manager.Config{Store: st, Hooks: disc.Hooks, SessionID: cfg.SessionID, RepoRoot: cfg.RepoRoot, Version: cfg.Version, BuildID: cfg.BuildID, Cancel: cancel, SignalRun: r.signalDrain, ActivateLSP: r.requestLSPRun})
 	if err != nil {
 		_ = st.Close()
 		return nil, err

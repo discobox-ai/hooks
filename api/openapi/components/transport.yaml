@@ -9,6 +9,9 @@ PingResponse:
     version:
       type: integer
       format: int64
+    build_id:
+      type: string
+      description: Content digest of the daemon's executable. Empty when the daemon could not read it.
 StatusResponse:
   type: object
   required: [session_id, repo_root, paused, running, queued, hooks, updated_at]

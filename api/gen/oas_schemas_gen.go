@@ -1361,6 +1361,8 @@ type PingResponse struct {
 	Ok        bool   `json:"ok"`
 	SessionID string `json:"session_id"`
 	Version   int64  `json:"version"`
+	// Content digest of the daemon's executable. Empty when the daemon could not read it.
+	BuildID OptString `json:"build_id"`
 }
 
 // GetOk returns the value of Ok.
@@ -1378,6 +1380,11 @@ func (s *PingResponse) GetVersion() int64 {
 	return s.Version
 }
 
+// GetBuildID returns the value of BuildID.
+func (s *PingResponse) GetBuildID() OptString {
+	return s.BuildID
+}
+
 // SetOk sets the value of Ok.
 func (s *PingResponse) SetOk(val bool) {
 	s.Ok = val
@@ -1391,6 +1398,11 @@ func (s *PingResponse) SetSessionID(val string) {
 // SetVersion sets the value of Version.
 func (s *PingResponse) SetVersion(val int64) {
 	s.Version = val
+}
+
+// SetBuildID sets the value of BuildID.
+func (s *PingResponse) SetBuildID(val OptString) {
+	s.BuildID = val
 }
 
 // Ref: #/QueueResponse

@@ -22,6 +22,7 @@ type Manager struct {
 	sessionID   string
 	repoRoot    string
 	version     int64
+	buildID     string
 	cancel      context.CancelFunc
 	signalRun   func()
 	activateLSP func(hookID string, force bool) (bool, error)
@@ -40,6 +41,7 @@ type Config struct {
 	SessionID string
 	RepoRoot  string
 	Version   int64
+	BuildID   string
 	Cancel    context.CancelFunc
 	SignalRun func()
 	// ActivateLSP starts (or refreshes) the language server for an LSP hook in
@@ -65,6 +67,7 @@ func New(cfg Config) (*Manager, error) {
 		sessionID:   cfg.SessionID,
 		repoRoot:    cfg.RepoRoot,
 		version:     cfg.Version,
+		buildID:     cfg.BuildID,
 		cancel:      cfg.Cancel,
 		signalRun:   cfg.SignalRun,
 		activateLSP: cfg.ActivateLSP,
@@ -157,7 +160,7 @@ func (m *Manager) Running() bool {
 
 // Ping returns daemon reachability metadata.
 func (m *Manager) Ping(_ context.Context) model.PingResponse {
-	return model.PingResponse{OK: true, SessionID: m.sessionID, Version: m.version}
+	return model.PingResponse{OK: true, SessionID: m.sessionID, Version: m.version, BuildID: m.buildID}
 }
 
 // Status returns current session status.
