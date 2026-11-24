@@ -17,12 +17,11 @@ import (
 	"text/tabwriter"
 	"time"
 
-	hooksapi "github.com/discobox-ai/hooks"
-	hookapi "github.com/discobox-ai/hooks/api"
-	"github.com/discobox-ai/hooks/client"
-	"github.com/discobox-ai/hooks/daemon"
-	"github.com/discobox-ai/hooks/models"
-	"github.com/discobox-ai/hooks/processhelper"
+	"github.com/discobox-ai/hooks/internal/daemon"
+	"github.com/discobox-ai/hooks/internal/processhelper"
+	hookapi "github.com/discobox-ai/hooks/pkg/api"
+	"github.com/discobox-ai/hooks/pkg/client"
+	hooksapi "github.com/discobox-ai/hooks/pkg/hooks"
 	"github.com/discobox-ai/x/gitutil"
 	idpkg "github.com/discobox-ai/x/id"
 	"github.com/spf13/cobra"
@@ -425,15 +424,15 @@ func (a *app) newOutputCommand() *cobra.Command {
 }
 
 type checkHookOutput struct {
-	HookID      string        `json:"hook_id"`
-	Name        string        `json:"name,omitempty"`
-	Description string        `json:"description,omitempty"`
-	Type        string        `json:"type,omitempty"`
-	Pattern     string        `json:"pattern,omitempty"`
-	Phase       string        `json:"phase,omitempty"`
-	Path        string        `json:"path,omitempty"`
-	Status      models.Status `json:"status"`
-	Output      string        `json:"output"`
+	HookID      string          `json:"hook_id"`
+	Name        string          `json:"name,omitempty"`
+	Description string          `json:"description,omitempty"`
+	Type        string          `json:"type,omitempty"`
+	Pattern     string          `json:"pattern,omitempty"`
+	Phase       string          `json:"phase,omitempty"`
+	Path        string          `json:"path,omitempty"`
+	Status      hooksapi.Status `json:"status"`
+	Output      string          `json:"output"`
 }
 
 var errCheckFailed = errors.New("hooks check failed")
@@ -1067,7 +1066,7 @@ type lspStatusRow struct {
 	Name            string              `json:"name"`
 	LanguageID      string              `json:"language_id,omitempty"`
 	Pattern         string              `json:"pattern,omitempty"`
-	Status          models.Status       `json:"status"`
+	Status          hooksapi.Status     `json:"status"`
 	Paused          bool                `json:"paused"`
 	DiagnosticCount int                 `json:"diagnostic_count"`
 	LastError       string              `json:"last_error,omitempty"`
@@ -1142,7 +1141,7 @@ func writeCheckProgress(w io.Writer, resp *client.StatusResponse) {
 }
 
 func checkRunningSummary(resp *client.StatusResponse) string {
-	ids := hookIDsWithStatus(resp.Hooks, models.StatusRunning)
+	ids := hookIDsWithStatus(resp.Hooks, hooksapi.StatusRunning)
 	if ids != "-" {
 		return ids
 	}
@@ -1153,7 +1152,7 @@ func checkRunningSummary(resp *client.StatusResponse) string {
 }
 
 func checkQueuedSummary(resp *client.StatusResponse) string {
-	ids := hookIDsWithStatus(resp.Hooks, models.StatusQueued)
+	ids := hookIDsWithStatus(resp.Hooks, hooksapi.StatusQueued)
 	if ids != "-" {
 		return ids
 	}
@@ -1163,7 +1162,7 @@ func checkQueuedSummary(resp *client.StatusResponse) string {
 	return "-"
 }
 
-func hookIDsWithStatus(hooksList []client.HookStatus, status models.Status) string {
+func hookIDsWithStatus(hooksList []client.HookStatus, status hooksapi.Status) string {
 	ids := make([]string, 0)
 	for _, h := range hooksList {
 		if h.Status == status {
@@ -1696,7 +1695,7 @@ func failedHooks(hooks []client.HookStatus) []client.HookStatus {
 		if h.Hook.ID == "" {
 			continue
 		}
-		if h.Status == models.StatusFailure {
+		if h.Status == hooksapi.StatusFailure {
 			out = append(out, h)
 		}
 	}
