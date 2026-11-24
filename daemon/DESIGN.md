@@ -238,6 +238,18 @@ and intentionally continued fail-open with the candidate changes it had, so
 subsequent observed-change or enqueue events from the same batch may include
 paths Git would normally ignore.
 
+Watcher errors are audited with `watch.failed`. A native watcher error, such
+as an event overflow, schedules a rescan and is usually transient. A rescan
+error, such as a directory the watcher cannot read, is not: the rescan gives up
+on the whole tree, so until it clears the daemon detects no file changes
+anywhere in the repository. The watcher retries a failing rescan on every
+resync tick and reports the error again each time, and it does not signal when
+a failure has cleared, so the daemon records a given error message at most
+once per 10 minutes while it keeps being reported, with `repeats` counting the
+reports suppressed since it was last recorded. A different message is recorded
+at once. A persistent failure therefore stays visible in
+`discobox-hooks events` without adding an event per second.
+
 The canonical event type and `details` field catalog lives in
 `hooks/api.KnownEventTypes`. Production event emitters in daemon, manager, and
 store code should populate the required fields documented there so

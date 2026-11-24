@@ -162,6 +162,11 @@ func KnownEventTypes() []EventTypeInfo {
 			{Name: "kind", Description: "created, modified, or deleted", Required: true},
 			{Name: "error", Description: "language server update error", Required: true},
 		}},
+		{Type: "watch.failed", Description: "The file watcher reported an error, such as a directory it could not read or watch, or a native event overflow. While a rescan keeps failing, for example on an unreadable directory, no file changes anywhere in the repository are detected and no hooks are enqueued from them. The watcher retries every second; the same error is recorded at most once every 10 minutes while it persists.", Details: []EventDetailInfo{
+			{Name: "repo_root", Description: "repository root being watched", Required: true},
+			{Name: "error", Description: "watcher error", Required: true},
+			{Name: "repeats", Description: "times the same error was reported and not recorded since it was last recorded; 0 the first time", Required: true},
+		}},
 		{Type: "watch.snapshot.persist.failed", Description: "The daemon failed to persist the watcher snapshot checkpoint.", Details: []EventDetailInfo{
 			{Name: "files", Description: "number of watcher snapshot entries", Required: true},
 			{Name: "paths", Description: "number of changed paths in the attempted checkpoint update", Required: true},

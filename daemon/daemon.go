@@ -433,6 +433,8 @@ func (r *runtimeState) withRequestTracking(next http.Handler) http.Handler {
 }
 
 func (r *runtimeState) watchLoop(w *watcher.Watcher) {
+	errs := w.Errors()
+	dedup := watchErrorDedup{interval: watchErrorRepeatInterval}
 	for {
 		select {
 		case <-r.ctx.Done():
@@ -446,9 +448,69 @@ func (r *runtimeState) watchLoop(w *watcher.Watcher) {
 			} else if batch.Snapshot != nil {
 				r.persistWatchedCheckpoint(batch.Snapshot, nil)
 			}
-		case <-w.Errors():
+		case err, ok := <-errs:
+			if !ok {
+				errs = nil
+				continue
+			}
+			if err == nil {
+				continue
+			}
+			msg := err.Error()
+			if repeats, record := dedup.observe(msg, time.Now()); record {
+				_ = r.recordEvent("watch.failed", "", "", "file watcher error", map[string]any{"repo_root": r.cfg.RepoRoot, "error": msg, "repeats": repeats})
+			}
 		}
 	}
+}
+
+// watchErrorRepeatInterval is how long the daemon suppresses repeats of a
+// watcher error it has recorded. The watcher retries a failing rescan on every
+// resync tick (each second) and reports the error again each time, so without
+// this a persistent failure would record one watch.failed event per second.
+// The watcher does not signal that a failure has cleared (a scan that finds no
+// changes delivers nothing), so suppression is by time rather than until
+// recovery: a failure that persists is recorded again once per interval.
+const watchErrorRepeatInterval = 10 * time.Minute
+
+// watchErrorDedup decides which watcher errors to record as watch.failed.
+type watchErrorDedup struct {
+	interval time.Duration
+	seen     map[string]*watchErrorSeen
+}
+
+type watchErrorSeen struct {
+	recordedAt time.Time
+	lastSeen   time.Time
+	suppressed int
+}
+
+// observe reports whether the watcher error msg, seen at now, should be
+// recorded, and how many repeats of it were suppressed since it was last
+// recorded. An error is recorded the first time it is seen and again once the
+// interval has passed since it was last recorded. Errors not seen for an
+// interval are forgotten, so the map holds only errors seen recently.
+func (d *watchErrorDedup) observe(msg string, now time.Time) (int, bool) {
+	if d.seen == nil {
+		d.seen = make(map[string]*watchErrorSeen)
+	}
+	for key, entry := range d.seen {
+		if now.Sub(entry.lastSeen) >= d.interval {
+			delete(d.seen, key)
+		}
+	}
+	entry, ok := d.seen[msg]
+	if ok && now.Sub(entry.recordedAt) < d.interval {
+		entry.lastSeen = now
+		entry.suppressed++
+		return 0, false
+	}
+	repeats := 0
+	if ok {
+		repeats = entry.suppressed
+	}
+	d.seen[msg] = &watchErrorSeen{recordedAt: now, lastSeen: now}
+	return repeats, true
 }
 
 func (r *runtimeState) schedulerLoop() {
