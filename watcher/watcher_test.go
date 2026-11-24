@@ -147,6 +147,66 @@ func TestDiffSnapshotsIgnoresMtimeOnlyRewriteForRegularFiles(t *testing.T) {
 	}
 }
 
+func TestDiffSnapshotsComparesMetadataWhenADigestIsMissing(t *testing.T) {
+	// A checkpoint row from a build that did not persist hashes has Hash "".
+	// The fresh scan has one; the file is unchanged when size and mtime match.
+	oldSnap := map[string]Entry{
+		"a.go": {Path: "a.go", Size: 10, ModTime: time.Unix(1, 0)},
+	}
+	newSnap := map[string]Entry{
+		"a.go": {Path: "a.go", Size: 10, ModTime: time.Unix(1, 0), Hash: "abc"},
+	}
+	if changes := diffSnapshots(oldSnap, newSnap); len(changes) != 0 {
+		t.Fatalf("expected no changes for matching size and mtime, got %#v", changes)
+	}
+
+	// Without a digest on one side, an mtime change is reported.
+	newSnap["a.go"] = Entry{Path: "a.go", Size: 10, ModTime: time.Unix(2, 0), Hash: "abc"}
+	changes := diffSnapshots(oldSnap, newSnap)
+	if len(changes) != 1 || changes[0].Kind != Modified {
+		t.Fatalf("expected one Modified change, got %#v", changes)
+	}
+}
+
+func TestBackfillHashesFillsOnlyUnchangedFiles(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "same.go"), []byte("same"))
+	writeFile(t, filepath.Join(root, "moved.go"), []byte("moved"))
+	writeFile(t, filepath.Join(root, "hashed.go"), []byte("hashed"))
+	if err := os.Mkdir(filepath.Join(root, "dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	w, err := New(root, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := w.Snapshot()
+	_ = w.Close()
+	want := snap["same.go"].Hash
+	for _, path := range []string{"same.go", "moved.go"} {
+		entry := snap[path]
+		entry.Hash = ""
+		snap[path] = entry
+	}
+	// moved.go changed after the checkpoint: its stored mtime no longer matches.
+	moved := snap["moved.go"]
+	moved.ModTime = moved.ModTime.Add(-time.Second)
+	snap["moved.go"] = moved
+
+	if filled := BackfillHashes(root, snap); filled != 1 {
+		t.Fatalf("filled %d hashes, want 1", filled)
+	}
+	if got := snap["same.go"].Hash; got != want {
+		t.Fatalf("same.go hash = %q, want %q", got, want)
+	}
+	if got := snap["moved.go"].Hash; got != "" {
+		t.Fatalf("moved.go hash = %q, want none: its content is not the checkpoint's", got)
+	}
+	if got := snap["dir"].Hash; got != "" {
+		t.Fatalf("dir hash = %q, want none", got)
+	}
+}
+
 func TestWatcherIgnoresIdenticalContentRewrite(t *testing.T) {
 	root := t.TempDir()
 	w := newTestWatcher(t, root)

@@ -142,7 +142,12 @@ func sameEntry(a, b Entry) bool {
 		// Compare content, not mtime: many tools rewrite regular files (go.sum,
 		// go.work, formatter output) with identical bytes but a new mtime, which
 		// must not count as a change or the file-change hooks loop forever.
-		return a.Size == b.Size && a.Hash == b.Hash
+		if a.Hash != "" && b.Hash != "" {
+			return a.Size == b.Size && a.Hash == b.Hash
+		}
+		// One side has no digest: a checkpoint row from a build that did not
+		// persist hashes, or a file that could not be read. Fall back to size
+		// and mtime rather than reporting every such file as modified.
 	}
 	// Non-regular files (directories, symlinks) carry no content hash; fall back
 	// to size and mtime metadata.

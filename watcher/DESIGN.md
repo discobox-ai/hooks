@@ -61,6 +61,17 @@ created, modified, and deleted changes that happened while the daemon was
 stopped. Emitted batches include the new full snapshot so the daemon can replace
 the checkpoint after processing.
 
+Regular files are compared by size and content hash, and the checkpoint carries
+each entry's `Hash` so a restart compares content too: a file rewritten with
+identical bytes while the daemon was stopped is not reported. When either side
+of a comparison has no hash (a checkpoint row from an older build, or a file that
+could not be read), the comparison falls back to size and mtime.
+`BackfillHashes` upgrades such a checkpoint: it hashes each hashless file whose
+size and mtime still match its entry (the files that fallback would call
+unchanged anyway) so the daemon can save them once. A scan reuses
+the previous hash when a file's size and mtime are unchanged, so an edit that
+keeps both is not detected, at restart as in steady state.
+
 ## Non-Responsibilities
 
 - Do not know about hook definitions.

@@ -249,6 +249,14 @@ func (r *runtimeState) run(parent context.Context) (err error) {
 	if err != nil {
 		return shutdownRequested(err)
 	}
+	// A checkpoint saved before hashes were persisted has none. Fill in those of
+	// files that are unchanged and save them once, so later restarts compare
+	// content rather than mtime for files that never change again.
+	if initialSnapshot != nil && watcher.BackfillHashes(r.cfg.RepoRoot, initialSnapshot) > 0 {
+		if err := r.store.ReplaceWatchedSnapshot(r.ctx, initialSnapshot); err != nil {
+			return shutdownRequested(err)
+		}
+	}
 	w, err := watcher.New(r.cfg.RepoRoot, watcher.Options{Debounce: 200 * time.Millisecond, InitialSnapshot: initialSnapshot, PeriodicResync: time.Second, Ignore: ignoreHookRuntimePaths(r.cfg)})
 	if err != nil {
 		return shutdownRequested(err)
