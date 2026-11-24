@@ -1,0 +1,12 @@
+# The dev loop (go tool task dev): rebuild whenever the source changes.
+watch:
+  extensions: [go]
+  include: [go.mod, go.sum]
+  exclude: ["*_test.go"]
+  exclude_dirs: [build]
+
+build:
+  command: go tool task build
+
+# discobox-hooks is a CLI that starts its own session daemon on demand, so
+# there is nothing to run here.

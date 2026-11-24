@@ -19,10 +19,9 @@ import (
 	"text/tabwriter"
 	"time"
 
-	hooks "github.com/discobox-ai/hooks"
-	hookapi "github.com/discobox-ai/hooks/api"
-	"github.com/discobox-ai/hooks/client"
-	"github.com/discobox-ai/hooks/models"
+	hookapi "github.com/discobox-ai/hooks/pkg/api"
+	"github.com/discobox-ai/hooks/pkg/client"
+	hooks "github.com/discobox-ai/hooks/pkg/hooks"
 	"github.com/discobox-ai/x/gitutil"
 	"github.com/discobox-ai/x/shorttmp"
 	"github.com/spf13/cobra"
@@ -173,11 +172,11 @@ func TestWriteHooksJSON(t *testing.T) {
 
 func TestFilterRunTargetsSelectsPhaseScope(t *testing.T) {
 	statuses := []client.HookStatus{
-		{Hook: hooks.Hook{ID: "lint"}, Status: models.StatusQueued},
-		{Hook: hooks.Hook{ID: "review", Phase: "review"}, Status: models.StatusQueued},
-		{Hook: hooks.Hook{ID: "deploy", Phase: "deploy"}, Status: models.StatusQueued},
-		{Hook: hooks.Hook{ID: "success"}, Status: models.StatusSuccess},
-		{Hook: hooks.Hook{ID: "failed"}, Status: models.StatusFailure},
+		{Hook: hooks.Hook{ID: "lint"}, Status: hooks.StatusQueued},
+		{Hook: hooks.Hook{ID: "review", Phase: "review"}, Status: hooks.StatusQueued},
+		{Hook: hooks.Hook{ID: "deploy", Phase: "deploy"}, Status: hooks.StatusQueued},
+		{Hook: hooks.Hook{ID: "success"}, Status: hooks.StatusSuccess},
+		{Hook: hooks.Hook{ID: "failed"}, Status: hooks.StatusFailure},
 	}
 	got := filterRunTargets(statuses, runTargetOptions{})
 	if strings.Join(got, ",") != "lint,success,failed" {
@@ -243,7 +242,7 @@ func TestWriteDatabaseInspectionTables(t *testing.T) {
 		fn   func(*cobra.Command) error
 	}{
 		"runs": {want: "STATUS", fn: func(cmd *cobra.Command) error {
-			return a.writeRuns(cmd, []client.Run{{ID: "run-1", HookID: "lint", Status: models.StatusFailure, ExitCode: 1, Error: "boom"}})
+			return a.writeRuns(cmd, []client.Run{{ID: "run-1", HookID: "lint", Status: hooks.StatusFailure, ExitCode: 1, Error: "boom"}})
 		},
 		},
 		"changes": {want: "DIFF_BYTES", fn: func(cmd *cobra.Command) error {
@@ -523,7 +522,7 @@ func TestWriteCheckResultReportsNonSuccessfulOutputs(t *testing.T) {
 		Type:        "file",
 		Pattern:     "**/*.go",
 		Path:        ".discobox/hooks/lint.sh",
-		Status:      models.StatusFailure,
+		Status:      hooks.StatusFailure,
 		Output:      "lint failed\n",
 	}}
 	if err := writeCheckResult(&out, resp, outputs); err != nil {
@@ -543,9 +542,9 @@ func TestWriteCheckProgressReportsPendingWork(t *testing.T) {
 		Queued: 2,
 		Paused: true,
 		Hooks: []client.HookStatus{
-			{Hook: hooks.Hook{ID: "z-queued"}, Status: models.StatusQueued},
-			{Hook: hooks.Hook{ID: "running"}, Status: models.StatusRunning},
-			{Hook: hooks.Hook{ID: "a-queued"}, Status: models.StatusQueued},
+			{Hook: hooks.Hook{ID: "z-queued"}, Status: hooks.StatusQueued},
+			{Hook: hooks.Hook{ID: "running"}, Status: hooks.StatusRunning},
+			{Hook: hooks.Hook{ID: "a-queued"}, Status: hooks.StatusQueued},
 		},
 	}
 	writeCheckProgress(&out, resp)
@@ -576,7 +575,7 @@ func TestRetryableCheckWaitErrorIncludesDaemonDisconnects(t *testing.T) {
 }
 
 func TestHookIDsWithStatusUsesDashForEmpty(t *testing.T) {
-	got := hookIDsWithStatus([]client.HookStatus{{Hook: hooks.Hook{ID: "lint"}, Status: models.StatusSuccess}}, models.StatusRunning)
+	got := hookIDsWithStatus([]client.HookStatus{{Hook: hooks.Hook{ID: "lint"}, Status: hooks.StatusSuccess}}, hooks.StatusRunning)
 	if got != "-" {
 		t.Fatalf("hook ids = %q, want dash", got)
 	}
@@ -594,10 +593,10 @@ func TestCheckProgressFallsBackToAggregateState(t *testing.T) {
 
 func TestFailedHooksIgnoresIdleSuccessAndQueued(t *testing.T) {
 	hooksList := []client.HookStatus{
-		{Hook: hooks.Hook{ID: "idle"}, Status: models.StatusIdle},
-		{Hook: hooks.Hook{ID: "success"}, Status: models.StatusSuccess},
-		{Hook: hooks.Hook{ID: "failure"}, Status: models.StatusFailure},
-		{Hook: hooks.Hook{ID: "queued"}, Status: models.StatusQueued},
+		{Hook: hooks.Hook{ID: "idle"}, Status: hooks.StatusIdle},
+		{Hook: hooks.Hook{ID: "success"}, Status: hooks.StatusSuccess},
+		{Hook: hooks.Hook{ID: "failure"}, Status: hooks.StatusFailure},
+		{Hook: hooks.Hook{ID: "queued"}, Status: hooks.StatusQueued},
 	}
 	got := failedHooks(hooksList)
 	if len(got) != 1 || got[0].Hook.ID != "failure" {
@@ -1155,7 +1154,7 @@ func TestCheckOutputsIncludesLSPLifecycleError(t *testing.T) {
 	defer server.Close()
 	c := client.New("", client.WithBaseURL(server.URL), client.WithHTTPClient(server.Client()))
 	outputs, err := (&app{}).checkOutputs(context.Background(), c, []client.HookStatus{{
-		Hook: hooks.Hook{ID: "lsp", Engine: hooks.HookEngineLSP}, Status: models.StatusFailure, LastError: "language server exited: startup broken",
+		Hook: hooks.Hook{ID: "lsp", Engine: hooks.HookEngineLSP}, Status: hooks.StatusFailure, LastError: "language server exited: startup broken",
 	}})
 	if err != nil {
 		t.Fatal(err)
