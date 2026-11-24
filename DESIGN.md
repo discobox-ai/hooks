@@ -57,19 +57,20 @@ the same session do not share daemon state.
 
 | Package/path | Ownership |
 | --- | --- |
-| root package | Public hook model and orchestration-facing types shared across subpackages. |
-| [`models`](models/DESIGN.md) | GORM database models and storage-facing value types. |
-| [`api`](api/DESIGN.md) | Unix-socket OpenAPI contract, generated API scaffolding, generated core-model aliases, request/response DTOs, and the audit event type catalog shared by daemon, manager, service, client, and CLI. |
-| [`parser`](parser/DESIGN.md) | Hook file format, front matter parsing, discovery, validation, and metadata normalization. |
-| [`matcher`](matcher/DESIGN.md) | Git-ignore filtering, glob matching, and changed-file-to-hook mapping. |
-| [`watcher`](watcher/DESIGN.md) | Stable filesystem change detection from the Git root. |
-| [`runner`](runner/DESIGN.md) | Single hook process execution, environment construction, timeout, and output capture. |
-| [`processhelper`](processhelper/DESIGN.md) | Reusable self-reexec stdio helper for tying child process trees to parent liveness. |
-| [`store`](store/DESIGN.md) | GORM-backed session persistence, migrations, statuses, queue, and run history. |
-| [`service`](service/DESIGN.md) | API-level hook operations over store state and the manager-provided current hook set. |
-| [`manager`](manager/DESIGN.md) | Hook-domain runtime state and API-triggered side effects between daemon socket adapters/runtime loops, service, and store. |
-| [`daemon`](daemon/DESIGN.md) | Session process lifecycle, watcher/scheduler/runtime loops, bounded parallel queue draining, socket server, SSE transport, and idle shutdown. |
-| [`client`](client/DESIGN.md) | Unix-socket client used by CLI and future integrations. |
+| [`pkg/hooks`](pkg/hooks) | Public hook model and orchestration-facing types shared across subpackages. |
+| [`pkg/api`](pkg/api/DESIGN.md) | Unix-socket OpenAPI contract, generated API scaffolding, generated core-model aliases, request/response DTOs, and the audit event type catalog shared by daemon, manager, service, client, and CLI. |
+| [`pkg/client`](pkg/client/DESIGN.md) | Unix-socket client used by CLI and future integrations. |
+| [`internal/models`](internal/models/DESIGN.md) | GORM database models and storage-facing value types. |
+| [`internal/parser`](internal/parser/DESIGN.md) | Hook file format, front matter parsing, discovery, validation, and metadata normalization. |
+| [`internal/matcher`](internal/matcher/DESIGN.md) | Git-ignore filtering, glob matching, and changed-file-to-hook mapping. |
+| [`internal/watcher`](internal/watcher/DESIGN.md) | Stable filesystem change detection from the Git root. |
+| [`internal/runner`](internal/runner/DESIGN.md) | Single hook process execution, environment construction, timeout, and output capture. |
+| [`internal/processhelper`](internal/processhelper/DESIGN.md) | Reusable self-reexec stdio helper for tying child process trees to parent liveness. |
+| [`internal/store`](internal/store/DESIGN.md) | GORM-backed session persistence, migrations, statuses, queue, and run history. |
+| [`internal/service`](internal/service/DESIGN.md) | API-level hook operations over store state and the manager-provided current hook set. |
+| [`internal/manager`](internal/manager/DESIGN.md) | Hook-domain runtime state and API-triggered side effects between daemon socket adapters/runtime loops, service, and store. |
+| [`internal/daemon`](internal/daemon/DESIGN.md) | Session process lifecycle, watcher/scheduler/runtime loops, bounded parallel queue draining, socket server, SSE transport, and idle shutdown. |
+| [`internal/cmd/genmodelaliases`](internal/cmd/genmodelaliases) | Code generator for `pkg/api/model`'s core-model aliases, run by `go tool task generate`. |
 | [`cmd/discobox-hooks`](cmd/discobox-hooks/DESIGN.md) | CLI entrypoint and on-demand daemon startup. |
 
 `daemon` owns process lifecycle and transport adapters. It constructs `manager`
@@ -84,7 +85,7 @@ transport.
 ## Hook Discovery
 
 Discovery reads non-hidden files directly under `.discobox/hooks` and delegates
-file-format details to [`parser/DESIGN.md`](parser/DESIGN.md). At this level, the
+file-format details to [`internal/parser/DESIGN.md`](internal/parser/DESIGN.md). At this level, the
 important contracts are:
 
 - `.discobox/hooks` is repository-root relative.
@@ -94,10 +95,32 @@ important contracts are:
 - supported engines are `script`, `lsp`, compatibility `ai`, and reserved
   `builtin`.
 
-The first implementation should execute command/script hooks only. Native AI hook
-execution is intentionally out of scope; AI behavior should be prototyped with
-script hooks that call tools such as Claude Code or Codex and exit non-zero when
-feedback should block progress.
+Hooks other than LSP hooks run as scripts. There is no native AI execution: an
+`engine: ai` hook's file body is kept as its prompt, and the hook runs as a script
+like any other. AI behaviour is a script hook that calls a tool such as Claude
+Code or Codex, reading the changed files from the hook environment, and exits
+non-zero when its feedback should block progress:
+
+```bash
+#!/usr/bin/env bash
+#---
+# name: Claude Review
+# type: file
+# pattern: "**/*.go"
+#---
+set -euo pipefail
+
+prompt="Review these changed files. Reply SUCCESS if acceptable, otherwise FEEDBACK.
+
+$DISCOBOX_CHANGED_FILES_JSON"
+response="$(claude -p "$prompt")"
+printf '%s\n' "$response"
+
+case "$response" in
+  SUCCESS*) exit 0 ;;
+  *) exit 1 ;;
+esac
+```
 
 LSP hooks are file hooks whose script starts a language server over stdio. The
 daemon owns the LSP client lifecycle: it starts the server lazily on the first
@@ -117,12 +140,13 @@ Use a two-level stability model:
 
 1. The filesystem watcher coalesces low-level editor/kernel noise into stable
    tree change batches.
-2. The hook scheduler applies a five-second quiet-period debounce before matching
-   hooks and enqueueing work. A run request, or the release of an active phase,
-   ends the quiet period early (see Execution Semantics).
+2. The hook scheduler holds changes for a five-second quiet period before
+   matching hooks and enqueueing work. A run request, or the release of an
+   active phase, ends the quiet period early (see Execution Semantics).
 
-If file changes keep arriving continuously, add a maximum batch window before
-running a batch so hook execution cannot be starved forever.
+The quiet period starts with a batch's first change and is not extended by
+later ones, so changes that keep arriving are still flushed five seconds after
+the first of them.
 
 ## Execution Semantics
 
@@ -241,9 +265,9 @@ window; a negative value disables idle shutdown.
 
 ## Pre-Commit Integration
 
-Pre-commit hooks should be represented in discovery, but installation should be
-explicit. Prefer a generated Git hook that calls the Discobox hooks CLI/daemon
-instead of duplicating status updates in shell.
-
-Pre-commit design must account for session identity because Git hooks are
-repository-level while this daemon is session-scoped.
+`pre-commit` hooks are discovered and validated like other hooks. They never
+run on file changes, because only `file` hooks match changed paths, and nothing
+installs them as Git hooks: they run as scripts only when a run request names
+them or selects them through `all` or a `--phase` selector. Git hooks are
+repository-level while the daemon is session-scoped, and status writes go
+through the CLI/daemon rather than from shell (see `REVIEW.md`).

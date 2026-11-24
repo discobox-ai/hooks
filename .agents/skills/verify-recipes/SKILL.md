@@ -9,6 +9,14 @@ Use a temporary Git repository (`git init`) containing executable hooks in
 directories outside that repository. Run every CLI command with the same
 `--repo-root <repo> --session-id <unique-id>` arguments and XDG environment.
 The CLI starts its daemon automatically. Always finish with `daemon shutdown`.
+Keep XDG_RUNTIME_DIR short (e.g. under `/dev/shm`): the socket path below it
+must fit AF_UNIX's 108 bytes, and a scratchpad path is too long. The CLI then
+says only that the daemon "did not become ready".
+
+The repository's own `.discobox/hooks` run `go tool task` targets, and
+`check` needs actionlint from the flake. To drive the `review` phase, start the
+daemon from `nix develop` (in a copy of the checkout, not the checkout itself),
+or the hook fails with `actionlint: executable file not found`.
 
 For LSP startup failure, define an executable file hook with `engine: lsp`,
 `pattern: "**/*.go"`, and `language_id: go` that exits nonzero on startup.

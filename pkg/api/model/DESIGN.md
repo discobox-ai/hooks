@@ -17,9 +17,5 @@ into service, client, or CLI code.
 ## Generation
 
 Do not edit `aliases_gen.go` by hand. Update the component YAML files under
-`../openapi/components/model` and run:
-
-```bash
-cd ..
-go generate ./...
-```
+`../openapi/components/model` and run `go tool task generate` from the
+repository root.

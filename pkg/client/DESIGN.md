@@ -10,7 +10,7 @@ need to control or inspect a running daemon.
 - Connect to the daemon over Unix domain socket.
 - Implement request timeouts and connection errors clearly.
 - Provide typed methods for daemon API operations backed by the generated
-  `hooks/api/gen` client for non-streaming endpoints.
+  `pkg/api/gen` client for non-streaming endpoints.
 - Decode daemon responses into public client DTOs.
 - Avoid direct database writes.
 

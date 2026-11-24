@@ -239,8 +239,8 @@ subsequent observed-change or enqueue events from the same batch may include
 paths Git would normally ignore.
 
 The canonical event type and `details` field catalog lives in
-`hooks/api.KnownEventTypes`. Production event emitters in daemon, manager, and
-store code should populate the required fields documented there so
+`pkg/api.KnownEventTypes`. Production event emitters in daemon, manager, and
+store code populate the required fields documented there so
 `discobox-hooks events --list-types` stays useful as an operator reference.
 
 `GET /events` returns a bounded JSON snapshot newest first. `GET /events/stream`
@@ -258,21 +258,12 @@ forced.
 
 ## Socket API Ownership
 
-The daemon owns the server side of the Unix socket. The API should support at
-least:
+The daemon owns the server side of the Unix socket. The endpoints are those of
+the OpenAPI contract, [`pkg/api/openapi/hooks.yaml`](../../pkg/api/openapi/hooks.yaml).
 
-- ping/readiness
-- status
-- list hooks
-- pause/resume all hooks
-- pause/resume one hook
-- run hook
-- hook output lookup/download
-- graceful shutdown
-
-Use the generated `hooks/api/gen` server as the route, request-decoding, and
+Use the generated `pkg/api/gen` server as the route, request-decoding, and
 response-encoding boundary for ordinary JSON endpoints. The daemon adapter may
-convert through `hooks/api` DTOs while service boundaries still use those types.
+convert through `pkg/api` DTOs while service boundaries still use those types.
 Keep `GET /events/stream` hand-wired when necessary to preserve streaming flush
 semantics; it must still follow the OpenAPI path and payload contract. Do not
 define transport DTOs in daemon handlers.

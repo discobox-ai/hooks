@@ -2,7 +2,7 @@
 
 `api` owns the Unix-socket OpenAPI contract and exported user-facing API
 metadata shared by daemon handlers, manager/service code, client code, CLI code,
-and tests. Stable socket DTOs live in the `api/model` subpackage. The parent
+and tests. Stable socket DTOs live in the `pkg/api/model` subpackage. The parent
 package keeps the audit event type catalog used by `discobox-hooks events
 --list-types`.
 
@@ -26,25 +26,26 @@ package keeps the audit event type catalog used by `discobox-hooks events
 
 ## Generation
 
-Run generation from this package with:
+Regenerate from the repository root with:
 
 ```bash
-go generate ./...
+go tool task generate
 ```
 
-The generation directive uses the root module's tool-managed `ogen` binary and
-writes generated client, server, and schema files to `hooks/api/gen`. A second
-generation step scans top-level schema names in `openapi/components/model/*.yaml`
-and writes alias types to `hooks/api/model/aliases_gen.go`. Keep generated files
-checked in.
+The first directive runs the module's tool-managed `ogen` (a `tool` directive in
+`go.mod`) and writes generated client, server, and schema files to `gen`. The
+second runs [`internal/cmd/genmodelaliases`](../../internal/cmd/genmodelaliases),
+which scans top-level schema names in `openapi/components/model/*.yaml` and
+writes alias types to `model/aliases_gen.go`. Keep generated files checked in;
+`go tool task verify` fails when they are stale.
 
 ## DTO Policy
 
 Prefer generated DTOs from `gen` for the OpenAPI transport adapter. Prefer
-`api/model` for stable code-facing socket API models, including `Hook`,
+`pkg/api/model` for stable code-facing socket API models, including `Hook`,
 `HookStatus`, `Event`, run/change/snapshot/queue views, response wrappers, and
 request payloads. The parent `api` package should not define endpoint DTOs; keep
-those in `api/model` so the parent can focus on contract generation and
+those in `pkg/api/model` so the parent can focus on contract generation and
 user-facing API metadata.
 
 List endpoints that expose persisted state, such as `/runs`, `/changes`,

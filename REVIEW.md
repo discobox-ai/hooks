@@ -1,5 +1,10 @@
 # Hooks Review Notes
 
+- Keep `pkg/` free of `internal/` imports, so nothing exported there names an
+  internal type that programs outside this module cannot use.
+  `TestPublicPackagesImportNothingInternal` guards it. It was broken once by
+  `pkg/api/model` exposing `internal/models.Status` when the packages moved
+  into `pkg/` and `internal/` (#4).
 - Keep this module standalone. Do not import server internals, control-plane DTOs,
   or Discobot `harness-go` packages.
 - Preserve session scoping: one daemon/socket/database namespace per session.
@@ -21,5 +26,5 @@
   `recordEvent`/`hook_events` type there with a description. The
   `TestKnownEventTypesDocumentProductionEvents` CLI test guards daemon/store
   event literals.
-- Update `DESIGN.md` for architecture or data model changes; update `PLAN.md`
-  for phased implementation decisions and open questions.
+- Update `DESIGN.md` for architecture or data model changes. It describes
+  current behaviour only; plans and open questions belong in issues.

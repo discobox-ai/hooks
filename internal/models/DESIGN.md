@@ -7,15 +7,16 @@
 - Define exported GORM structs for all hook-owned tables.
 - Own table names, GORM tags, and model lifecycle hooks such as generated IDs.
 - Provide storage-facing value types used inside persisted JSON columns, such as
-  changed files and run results.
+  changed files and run results. A hook's scheduler `Status` is the public
+  `pkg/hooks.Status`, stored as its string value.
 - Stay independent from daemon HTTP handlers and client transport concerns.
 
 ## API Reuse Policy
 
-API responses may reuse a database model from this package when the database
-shape is already the intended API contract. If an endpoint needs projection,
-redaction, compatibility behavior, or a shape that combines multiple tables,
-define that response DTO in `hooks/api` instead.
+This package is internal, so API types never reuse its models: the socket
+API's DTOs live in `pkg/api/model`, and value types shared by both, such as the
+hook `Status`, live in `pkg/hooks`. Store and service code convert between the
+two.
 
 ## Schema ERD
 

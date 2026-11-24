@@ -1,5 +1,10 @@
 # Daemon Review Notes
 
+- The file-change quiet period is a fixed window from a batch's first change:
+  `schedulerLoop` arms its timer only when none is pending and never resets it.
+  Docs that call it a sliding debounce, or say continuous changes defer the
+  batch, are wrong. That mistake was made in #4's `DESIGN.md` rewrite.
+
 - Publish the terminal LSP runtime state and persisted startup failure before
   removing its pending startup marker. Otherwise check can settle while an
   immediate explicit retry still sees `starting` and is silently discarded.

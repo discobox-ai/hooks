@@ -4,14 +4,14 @@ The store package owns session-scoped hook persistence using GORM. It translates
 daemon state transitions into durable rows and provides read APIs for status,
 outputs, and run history. Audit event writes are also schema-checked here:
 `RecordEvent` and transactional `recordEventTx` validate event type names and
-required `details` fields against `hooks/api.KnownEventTypes` before inserting
+required `details` fields against `pkg/api.KnownEventTypes` before inserting
 `hook_events` rows.
 
 ## Responsibilities
 
 - Open session databases through `github.com/discobox-ai/x/gormdb`.
 - Auto-migrate or otherwise initialize the hook schema.
-- Use public GORM persistence structs from `hooks/models` for migrations and
+- Use public GORM persistence structs from `internal/models` for migrations and
   database queries.
 - Persist discovered hook definitions and config hashes.
 - Persist current hook status.
@@ -156,7 +156,7 @@ readers can distinguish "unchanged" from "intentionally not captured" paths.
 `hook_events` is persistence, but event shape validation also belongs at the
 store write boundary because every daemon, manager, and transactional store event
 passes through `RecordEvent` or `recordEventTx` before a row is inserted. The
-store imports `hooks/api` for the audit metadata catalog and validates event
+store imports `pkg/api` for the audit metadata catalog and validates event
 types and required detail fields against `api.KnownEventTypes`.
 
 Unknown event types and missing required detail values are write errors in
