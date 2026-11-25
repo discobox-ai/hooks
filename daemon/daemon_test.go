@@ -1801,3 +1801,73 @@ func TestNewRuntimeAppliesDefaultIdleTimeout(t *testing.T) {
 		t.Fatalf("negative idle timeout = %s, want it preserved", disabled.cfg.IdleTimeout)
 	}
 }
+
+func TestSecondDaemonLeavesRunningDaemonReachable(t *testing.T) {
+	repo := t.TempDir()
+	stateDir := t.TempDir()
+	runtimeDir := shorttmp.Dir(t)
+	socketPath := filepath.Join(runtimeDir, "daemon.sock")
+	tempDir := filepath.Join(runtimeDir, "tmp")
+	cfg := Config{
+		SessionID:   "second-daemon-session",
+		RepoRoot:    repo,
+		DBPath:      filepath.Join(stateDir, "hooks.db"),
+		SocketPath:  socketPath,
+		TempDir:     tempDir,
+		Debounce:    20 * time.Millisecond,
+		IdleTimeout: -1,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	firstErr := make(chan error, 1)
+	go func() { firstErr <- Run(ctx, cfg) }()
+
+	client := unixHTTPClient(socketPath)
+	var ping PingResponse
+	waitForJSON(t, client, http.MethodGet, "http://unix/ping", nil, &ping)
+	marker := filepath.Join(tempDir, "in-use")
+	if err := os.WriteFile(marker, []byte("first daemon"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Run(context.Background(), cfg)
+	if err == nil || !strings.Contains(err.Error(), "already in use") {
+		t.Fatalf("second daemon err = %v, want socket already in use", err)
+	}
+
+	if _, err := os.Stat(socketPath); err != nil {
+		t.Errorf("running daemon's socket after second daemon exits: %v", err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Errorf("running daemon's temp dir after second daemon exits: %v", err)
+	}
+	var again PingResponse
+	if err := tryJSON(unixHTTPClient(socketPath), http.MethodGet, "http://unix/ping", nil, &again); err != nil {
+		t.Errorf("running daemon unreachable after second daemon exits: %v", err)
+	}
+	// The second daemon must not have touched the running daemon's session
+	// row: starting a session ends any open one as terminated.
+	var events EventsResponse
+	if err := tryJSON(unixHTTPClient(socketPath), http.MethodGet, "http://unix/events?limit=100", nil, &events); err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	started := 0
+	for _, event := range events.Events {
+		switch event.Type {
+		case "daemon.started":
+			started++
+		case "daemon.terminated", "daemon.shutdown":
+			t.Errorf("second daemon recorded %s for the running daemon's session", event.Type)
+		}
+	}
+	if started != 1 {
+		t.Errorf("daemon.started events = %d, want 1 (only the running daemon)", started)
+	}
+
+	cancel()
+	select {
+	case <-firstErr:
+	case <-time.After(10 * time.Second):
+		t.Fatal("first daemon did not stop")
+	}
+}

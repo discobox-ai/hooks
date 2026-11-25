@@ -78,10 +78,24 @@ type ShutdownResponse = model.ShutdownResponse
 // Run starts a session daemon and blocks until ctx is canceled, /shutdown is
 // called, idle timeout elapses, or a fatal startup error occurs.
 func Run(ctx context.Context, cfg Config) error {
-	r, err := newRuntime(ctx, cfg)
+	cfg, err := normalizeConfig(cfg)
 	if err != nil {
 		return err
 	}
+	// Claim the socket before touching any state shared with another daemon
+	// for the same session (the runtime temp dir, the session DB's daemon
+	// session row). A daemon that loses the socket to a running one must exit
+	// without disturbing it.
+	ln, err := claimSocket(ctx, cfg.SocketPath)
+	if err != nil {
+		return err
+	}
+	r, err := newRuntime(ctx, cfg)
+	if err != nil {
+		_ = ln.Close()
+		return err
+	}
+	r.listener = ln
 	return r.run(ctx)
 }
 
@@ -123,35 +137,34 @@ type runtimeState struct {
 	pendingLSP      map[string]time.Time
 }
 
-func newRuntime(ctx context.Context, cfg Config) (*runtimeState, error) {
+// normalizeConfig validates cfg and fills in its defaults. It has no side
+// effects, so it is safe to call before the socket is claimed.
+func normalizeConfig(cfg Config) (Config, error) {
 	if strings.TrimSpace(cfg.SessionID) == "" {
-		return nil, fmt.Errorf("session id is required")
+		return Config{}, fmt.Errorf("session id is required")
 	}
 	if cfg.RepoRoot == "" {
-		return nil, fmt.Errorf("repo root is required")
+		return Config{}, fmt.Errorf("repo root is required")
 	}
 	root, err := filepath.Abs(cfg.RepoRoot)
 	if err != nil {
-		return nil, err
+		return Config{}, err
 	}
 	cfg.RepoRoot = root
 	if cfg.DBPath == "" {
-		return nil, fmt.Errorf("db path is required")
+		return Config{}, fmt.Errorf("db path is required")
 	}
 	if cfg.SocketPath == "" {
-		return nil, fmt.Errorf("socket path is required")
+		return Config{}, fmt.Errorf("socket path is required")
 	}
 	if cfg.TempDir == "" {
 		cfg.TempDir = filepath.Join(filepath.Dir(cfg.SocketPath), "tmp")
 	}
 	tempDir, err := filepath.Abs(cfg.TempDir)
 	if err != nil {
-		return nil, err
+		return Config{}, err
 	}
 	cfg.TempDir = tempDir
-	if err := resetRuntimeTempDir(cfg.TempDir); err != nil {
-		return nil, err
-	}
 	if cfg.Debounce <= 0 {
 		cfg.Debounce = defaultDebounce
 	}
@@ -167,7 +180,20 @@ func newRuntime(ctx context.Context, cfg Config) (*runtimeState, error) {
 	if cfg.IdleTimeout == 0 {
 		cfg.IdleTimeout = defaultIdleTimeout
 	}
+	return cfg, nil
+}
 
+// newRuntime resets the session's runtime temp dir and records a new daemon
+// session in the DB. Both are shared with any other daemon for the session, so
+// Run claims the socket first.
+func newRuntime(ctx context.Context, cfg Config) (*runtimeState, error) {
+	cfg, err := normalizeConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if err := resetRuntimeTempDir(cfg.TempDir); err != nil {
+		return nil, err
+	}
 	st, err := store.Open(ctx, store.Options{Path: cfg.DBPath, Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		return nil, err
@@ -212,10 +238,12 @@ func (r *runtimeState) run(parent context.Context) (err error) {
 			cancel()
 		}
 		if r.listener != nil {
+			// Closing the listener unlinks the socket file it created. Never
+			// remove the path itself: another daemon may have bound it since
+			// this one stopped listening, or this one may never have bound it.
 			_ = r.listener.Close()
 		}
 		r.removeRuntimeFile()
-		_ = os.Remove(r.cfg.SocketPath)
 		if r.sessionID != "" {
 			_ = r.store.EndDaemonSession(context.Background(), r.sessionID, "shutdown")
 		}
@@ -285,24 +313,28 @@ func (r *runtimeState) run(parent context.Context) (err error) {
 	}
 }
 
+// claimSocket binds the session's Unix socket, replacing a stale socket file
+// but failing when another daemon is still serving on it. The listener unlinks
+// the socket file when it closes, so only the daemon that bound it removes it.
+func claimSocket(ctx context.Context, path string) (net.Listener, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	if err := prepareSocketPath(path); err != nil {
+		return nil, err
+	}
+	return (&net.ListenConfig{}).Listen(ctx, "unix", path)
+}
+
+// startServer builds the HTTP server for the listener Run claimed.
 func (r *runtimeState) startServer() error {
-	if err := os.MkdirAll(filepath.Dir(r.cfg.SocketPath), 0o755); err != nil {
-		return err
-	}
-	if err := prepareSocketPath(r.cfg.SocketPath); err != nil {
-		return err
-	}
-	ln, err := (&net.ListenConfig{}).Listen(r.ctx, "unix", r.cfg.SocketPath)
-	if err != nil {
-		return err
+	if r.listener == nil {
+		return fmt.Errorf("hook daemon socket %s was not claimed", r.cfg.SocketPath)
 	}
 	routes, err := r.generatedRoutes()
 	if err != nil {
-		_ = ln.Close()
-		r.listener = nil
 		return err
 	}
-	r.listener = ln
 	r.server = &http.Server{
 		Handler:           r.withRequestTracking(routes),
 		ReadHeaderTimeout: 10 * time.Second,
