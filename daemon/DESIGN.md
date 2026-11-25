@@ -115,6 +115,14 @@ new row, the daemon marks any prior unended row for the same session as ended at
 that row's last heartbeat and emits `daemon.terminated`. This records that file
 watch events may have been missed between the last heartbeat and the new startup.
 
+A daemon claims the session's Unix socket before it touches any state it shares
+with another daemon for the same session: the runtime temp directory reset, the
+hook definition refresh, and the new `daemon_sessions` row. A daemon that finds
+the socket served by a live daemon exits without changing any of that, and only
+the daemon that bound the socket removes it on exit. Otherwise a losing daemon
+would end the live daemon's session row as `terminated`, wipe its temp
+directory, and unlink its socket, leaving it unreachable.
+
 ## Ignore Policy
 
 The watcher always prunes `.git` and `node_modules` directory trees. Before the
