@@ -1801,3 +1801,102 @@ func TestNewRuntimeAppliesDefaultIdleTimeout(t *testing.T) {
 		t.Fatalf("negative idle timeout = %s, want it preserved", disabled.cfg.IdleTimeout)
 	}
 }
+
+func TestWatchLoopRecordsPersistentWatcherErrorWithoutFlooding(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permission bits do not deny reads on Windows")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	repo := t.TempDir()
+	st, err := hookstore.Open(ctx, hookstore.Options{Path: filepath.Join(t.TempDir(), "hooks.db")})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	r := &runtimeState{cfg: Config{RepoRoot: repo}, store: st, discovery: &parser.Discovery{}, ctx: ctx, drainSignal: make(chan struct{}, 1)}
+
+	w, err := watcher.New(repo, watcher.Options{Debounce: 50 * time.Millisecond, PeriodicResync: 100 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("new watcher: %v", err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+	go r.watchLoop(w)
+
+	// An unreadable directory makes every rescan fail; the watcher retries on
+	// each resync tick and reports the same error each time.
+	locked := filepath.Join(repo, "locked")
+	if err := os.Mkdir(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	if _, err := os.ReadDir(locked); err == nil {
+		t.Skip("directory permission bits do not deny reads for this user (running as root?)")
+	}
+
+	watcherErrorEvents := func() []hookstore.Event {
+		events, err := st.ListEvents(ctx, hookstore.EventQuery{Limit: 1000})
+		if err != nil {
+			t.Fatalf("list events: %v", err)
+		}
+		var out []hookstore.Event
+		for _, event := range events {
+			if msg, _ := event.Details["error"].(string); strings.Contains(msg, "permission denied") {
+				out = append(out, event)
+			}
+		}
+		return out
+	}
+
+	time.Sleep(2 * time.Second) // ~20 failed resyncs
+	got := watcherErrorEvents()
+	if len(got) == 0 {
+		t.Fatalf("persistent watcher error left no audit event after 2s of failing rescans")
+	}
+	if len(got) > 2 {
+		t.Fatalf("persistent watcher error recorded %d events, want it deduplicated", len(got))
+	}
+}
+
+func TestWatchErrorDedupRecordsRepeatsOncePerInterval(t *testing.T) {
+	d := watchErrorDedup{interval: time.Minute}
+	t0 := time.Unix(1_700_000_000, 0)
+	observe := func(msg string, at time.Duration, wantRepeats int, wantRecord bool) {
+		t.Helper()
+		repeats, record := d.observe(msg, t0.Add(at))
+		if record != wantRecord || repeats != wantRepeats {
+			t.Fatalf("observe(%q, +%s) = (%d, %t), want (%d, %t)", msg, at, repeats, record, wantRepeats, wantRecord)
+		}
+	}
+	observe("scan: permission denied", 0, 0, true)
+	for i := 1; i <= 59; i++ {
+		observe("scan: permission denied", time.Duration(i)*time.Second, 0, false)
+	}
+	// A different error is recorded at once, without disturbing the first.
+	observe("watch: too many open files", 30*time.Second, 0, true)
+	// Once the interval has passed, the persistent error is recorded again with
+	// the count of repeats suppressed in between.
+	observe("scan: permission denied", time.Minute, 59, true)
+	observe("scan: permission denied", time.Minute+time.Second, 0, false)
+	// An error not seen for a whole interval is forgotten; seen again, it is new.
+	observe("watch: too many open files", 2*time.Minute+time.Second, 0, true)
+	if _, ok := d.seen["scan: permission denied"]; ok {
+		t.Fatalf("error last seen over an interval ago was not forgotten: %#v", d.seen)
+	}
+}
+
+func TestWatchErrorDedupKeepsCountOfErrorStillRepeating(t *testing.T) {
+	d := watchErrorDedup{interval: time.Minute}
+	t0 := time.Unix(1_700_000_000, 0)
+	d.observe("a", t0)
+	d.observe("a", t0.Add(59*time.Second))
+	// "a" was recorded over an interval ago but seen recently, so another
+	// error arriving must not forget it or its suppressed count.
+	d.observe("b", t0.Add(61*time.Second))
+	if repeats, record := d.observe("a", t0.Add(62*time.Second)); !record || repeats != 1 {
+		t.Fatalf("observe(a) = (%d, %t), want (1, true)", repeats, record)
+	}
+}
